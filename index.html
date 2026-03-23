@@ -2638,40 +2638,40 @@ function selectPM(method) {
 }
 
 function payWithPaystack() {
-  if (!currentUser) return;
-
-  // ── Payment integrity check ─────────────────────────────────
-  if (!cart || cart.length === 0) { toast('Cart is empty','Add items before paying','warn'); return; }
-
-  // Recalculate total from server-fetched product prices (not user-modifiable)
-  const total = cart.reduce((s,c) => {
-    const price = parseFloat(c.price);
-    const qty   = Math.max(1, parseInt(c.qty) || 1);
-    if (isNaN(price) || price <= 0) return s;
-    return s + (price * qty);
-  }, 0);
-
-  if (total <= 0)          { toast('Invalid total','Cart total is invalid','error'); return; }
-  if (total > 100000000)   { toast('Total too high','Please contact support for large orders','warn'); return; }
-
-  const amountKobo = Math.round(total * 100); // Paystack uses kobo (integer only)
-  const ref = 'bs_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
-
   const handler = PaystackPop.setup({
     key: PAYSTACK_PUBLIC_KEY,
     email: currentUser.email,
-    amount: amountKobo,
-    currency: 'NGN',
-    ref,
-    metadata: {
-      buyer_id: currentUser.id,
-      cart_hash: btoa(JSON.stringify(cart.map(c=>({id:c.id,qty:c.qty||1,price:c.price})))).substring(0,200),
-      cart: JSON.stringify(cart.map(c=>({id:c.id,name:c.name,qty:c.qty||1,price:c.price})))
-    },
-    callback: function(response) {
-      saveOrderToDb(response.reference, 'paystack', response.reference);
-    },
-    onClose: function() { toast('Payment cancelled','','warn'); }
+    amount: total * 100, 
+    callback: async function(response) {
+      // 1. Show a loader
+      toast('Verifying Payment...', 'Please do not close the window', 'info');
+
+      // 2. Call your Edge Function instead of local saveOrderToDb
+      try {
+        const verification = await fetch(`${EDGE_URL}/verify-payment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reference: response.reference,
+            order_details: {
+              buyer_id: currentUser.id,
+              items: cart,
+              delivery_address: document.getElementById('co-address').value,
+              // ... other fields
+            }
+          })
+        });
+
+        const result = await verification.json();
+        if (result.success) {
+          cart = []; saveCart();
+          goCheckoutStep(3);
+          toast('Payment Verified!', 'Your order is confirmed', 'success');
+        }
+      } catch (err) {
+        toast('Verification Error', 'Contact support with ref: ' + response.reference, 'error');
+      }
+    }
   });
   handler.openIframe();
 }
