@@ -14,6 +14,7 @@
 <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script data-cfasync="false" src="https://js.paystack.co/v1/inline.js"></script>
 <script data-cfasync="false" src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.0.0"></script>
 <!-- Security headers (supplement server-side headers) -->
 <meta http-equiv="X-Content-Type-Options" content="nosniff">
 <meta http-equiv="X-XSS-Protection" content="1; mode=block">
@@ -2390,10 +2391,20 @@ function filterCat(cat) {
   applyCurrentFilters();
 }
 
+let searchTimeout;
 function doSearch() {
+  clearTimeout(searchTimeout);
   const q = document.getElementById('search-input').value.trim().toLowerCase();
-  if (q) { activeFilters.search = q; } else { delete activeFilters.search; }
-  applyCurrentFilters();
+  
+  // Wait 300ms after user stops typing to filter (saves battery/performance)
+  searchTimeout = setTimeout(() => {
+    if (q) { 
+      activeFilters.search = q; 
+    } else { 
+      delete activeFilters.search; 
+    }
+    applyCurrentFilters();
+  }, 300);
 }
 
 function applyFilters() {
@@ -2442,15 +2453,34 @@ function clearFilters() {
 
 function applyCurrentFilters() {
   let result = [...products];
-  if (activeFilters.category && activeFilters.category !== 'all') {
-    if (activeFilters.category === 'trending') result = result.filter(p=>p.review_count>0||p.avg_rating>=4);
-    else result = result.filter(p=>p.category===activeFilters.category);
+
+  // 1. SMART FUZZY SEARCH
+  if (activeFilters.search) {
+    const options = {
+      keys: ['name', 'description', 'category', 'location'],
+      threshold: 0.3, // 0.0 = perfect match, 1.0 = match anything
+      distance: 100
+    };
+    
+    const fuse = new Fuse(result, options);
+    const searchResult = fuse.search(activeFilters.search);
+    result = searchResult.map(res => res.item);
   }
-  if (activeFilters.search) result = result.filter(p=>(p.name+p.description+p.location).toLowerCase().includes(activeFilters.search));
-  if (activeFilters.priceMin) result = result.filter(p=>p.price>=activeFilters.priceMin);
-  if (activeFilters.priceMax) result = result.filter(p=>p.price<=activeFilters.priceMax);
-  if (activeFilters.minRating) result = result.filter(p=>(p.avg_rating||5)>=activeFilters.minRating);
-  if (activeFilters.condition) result = result.filter(p=>p.condition?.includes(activeFilters.condition));
+
+  // 2. CATEGORY FILTER
+  if (activeFilters.category && activeFilters.category !== 'all') {
+    if (activeFilters.category === 'trending') {
+       result = result.filter(p => p.review_count > 0 || p.avg_rating >= 4);
+    } else {
+       result = result.filter(p => p.category === activeFilters.category);
+    }
+  }
+
+  // 3. RANGE FILTERS
+  if (activeFilters.priceMin) result = result.filter(p => p.price >= activeFilters.priceMin);
+  if (activeFilters.priceMax) result = result.filter(p => p.price <= activeFilters.priceMax);
+  if (activeFilters.minRating) result = result.filter(p => (p.avg_rating || 5) >= activeFilters.minRating);
+
   filteredProducts = result;
   sortProds();
 }
