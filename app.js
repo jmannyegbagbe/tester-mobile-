@@ -1819,16 +1819,22 @@ function applySiteLogo(url) {
 }
    
 function switchAdminTab(tab) {
+  // Hide all tab panels
   document.querySelectorAll('.adm-tab').forEach(p => p.classList.add('hidden'));
-  document.querySelectorAll('[id^="atab-"]').forEach(b => b.classList.remove('active'));
+  // Deactivate all sidebar nav items
+  document.querySelectorAll('#admin-portal-view .dash-nav-item').forEach(b => b.classList.remove('active'));
+  // Show selected panel
   document.getElementById('adm-tab-' + tab)?.classList.remove('hidden');
-  document.getElementById('atab-' + tab)?.classList.add('active');
+  // Highlight sidebar item
+  document.getElementById('ap-nav-' + tab)?.classList.add('active');
+  // Load data
   if (tab === 'overview')     loadAdminOverview();
   if (tab === 'sellers')      loadAdminSellers();
   if (tab === 'orders')       loadAdminOrders();
   if (tab === 'disputes')     loadAdminDisputes();
   if (tab === 'withdrawals')  loadAdminWithdrawals();
-  if (tab === 'ai') adminAiHistory = []; // fresh context each time
+  if (tab === 'broadcast')    loadBroadcastHistory();
+  if (tab === 'ai')           adminAiHistory = [];
 }
 
 /* ── OVERVIEW ── */
@@ -2469,8 +2475,7 @@ function sendWhatsAppOrderNotification(order, sellerWa) {
   document.body.removeChild(link);
 }
 
-// Override saveOrderToDb to also trigger WA notification
-const _origSaveOrder = saveOrderToDb;
+// Full saveOrderToDb implementation (with WA notification)
 async function saveOrderToDb(txRef, method, paystackRef, proofUrl='') {
   try {
     const result = await callEdge('create-order', {
@@ -2512,8 +2517,7 @@ async function saveOrderToDb(txRef, method, paystackRef, proofUrl='') {
 // ====================================================
 //  STOREFRONT SALES COUNT
 // ====================================================
-// (patch viewStorefront to add real order count)
-const _origViewSF = viewStorefront;
+// viewStorefront — full implementation with order count + reviews
 async function viewStorefront(sellerId) {
   if (!sellerId) return;
   closeModal('product-modal');
@@ -2718,28 +2722,36 @@ function validateInput(str) {
 }
 
 function showAdminPortal() {
-  document.getElementById('buyer-view').style.display = 'none';
-  document.getElementById('seller-dashboard').style.display = 'none';
-  document.getElementById('service-provider-view').style.display = 'none';
-  document.getElementById('storefront-view').style.display = 'none';
-  document.getElementById('main-nav').style.display = 'none';
-  document.getElementById('topbar').style.display = 'none';
-  
-  document.getElementById('admin-portal-view').style.display = 'block';
-  document.body.style.background = 'var(--forest)';
-  
-  if(typeof loadAdminSellers === 'function') loadAdminSellers();
+  // Admin uses the seller dashboard with the admin tab active
+  // (The ds-admin section contains all admin tabs and is gated by guardAdminPanel)
+  showSellerDashboard();
+  // After render, switch to the admin section
+  setTimeout(() => {
+    showDash('admin');
+    // Populate spd user info if relevant
+    if (currentUser) {
+      const dash = document.getElementById('dash-user-name');
+      if (dash) dash.textContent = currentUser.profile?.name || 'Admin';
+    }
+    toast('🔐 Admin Portal', 'Welcome back, Commander', 'info', 4000);
+  }, 80);
 }
 
 function showServiceDashboard() {
+  if (!currentUser) { showModal('auth-modal'); toggleAuth('login'); return; }
   document.getElementById('buyer-view').style.display = 'none';
   document.getElementById('seller-dashboard').style.display = 'none';
-  document.getElementById('admin-portal-view').style.display = 'none';
   document.getElementById('storefront-view').style.display = 'none';
   
   document.getElementById('service-provider-view').style.display = 'block';
   document.body.classList.add('in-seller');
   currentRole = 'service_provider';
+
+  // Populate user info in SPD sidebar
+  const nameEl  = document.getElementById('spd-user-name');
+  const emailEl = document.getElementById('spd-user-email');
+  if (nameEl)  nameEl.textContent  = currentUser.profile?.name  || 'Service Pro';
+  if (emailEl) emailEl.textContent = currentUser.email || '';
 }
 
 function copyReferralLink() {
@@ -2776,3 +2788,46 @@ function showSpdDash(section) {
   const navEl = document.getElementById(`spd-nav-${section}`);
   if (navEl) navEl.classList.add('active');
 }
+
+// ====================================================
+//  SERVICE PROVIDER — Publish Gig
+// ====================================================
+async function publishServiceGig() {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  const title    = document.getElementById('spd-title')?.value.trim();
+  const category = document.getElementById('spd-category')?.value;
+  const rate     = parseFloat(document.getElementById('spd-rate')?.value) || 0;
+  const location = document.getElementById('spd-location')?.value.trim();
+  const desc     = document.getElementById('spd-desc')?.value.trim();
+  const wa       = document.getElementById('spd-wa')?.value.trim();
+  if (!title || !rate || !location || !desc || !wa) {
+    toast('Please fill all fields', '', 'warn'); return;
+  }
+  try {
+    const { error } = await db.from('service_gigs').insert({
+      provider_id:   currentUser.id,
+      title:         validateInput(title),
+      category,
+      starting_rate: rate,
+      location:      validateInput(location),
+      description:   validateInput(desc),
+      whatsapp:      wa,
+      status:        'active',
+      created_at:    new Date().toISOString()
+    });
+    if (error) throw error;
+    toast('Service Published! \uD83C\uDF89', 'Your gig is now live on BUYSELL', 'success');
+    ['spd-title','spd-rate','spd-location','spd-desc','spd-wa'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const gigsEl = document.getElementById('spd-gigs');
+    if (gigsEl) gigsEl.textContent = parseInt(gigsEl.textContent || '0') + 1;
+  } catch(e) {
+    toast('Publish Failed', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  HELP MODAL
+// ====================================================
+function openHelpModal() { showModal('help-modal'); }
