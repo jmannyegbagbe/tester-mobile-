@@ -132,10 +132,11 @@ function selectRole(role) {
   document.querySelectorAll('.role-card').forEach(c => c.classList.remove('active'));
   document.getElementById('role-card-' + role)?.classList.add('active');
   document.querySelector(`input[name="auth-role-radio"][value="${role}"]`).checked = true;
-  // Show/hide WhatsApp for seller/both
+  // Show/hide WhatsApp for seller/both/service_provider
   const needsWa = role === 'seller' || role === 'both' || role === 'service_provider';
   document.getElementById('auth-wa-group').classList.toggle('hidden', !needsWa);
   document.getElementById('role-both-note').classList.toggle('hidden', role !== 'both');
+  document.getElementById('role-sp-note')?.classList.toggle('hidden', role !== 'service_provider');
 }
 
 async function handleAuth(e) {
@@ -236,9 +237,10 @@ async function handleAuth(e) {
       closeModal('auth-modal');
 
       const msgs = {
-        buyer:  '🛍️ Welcome! Browse thousands of products.',
-        seller: '🏪 Welcome Seller! First month is FREE.',
-        both:   '🔄 Welcome! You can shop and sell on BUYSELL.'
+        buyer:            '🛍️ Welcome! Browse thousands of products.',
+        seller:           '🏪 Welcome Seller! First month is FREE.',
+        both:             '🔄 Welcome! You can shop and sell on BUYSELL.',
+        service_provider: '🔧 Welcome Service Pro! Set up your portfolio and start getting hired.'
       };
       setTimeout(() => toast('Account Created! 🎉', msgs[rawRole] || '', 'success', 5000), 400);
     }
@@ -1131,9 +1133,12 @@ async function submitReview() {
 function switchBuyerTab(tab) {
   document.getElementById('tab-shop').classList.toggle('active', tab==='shop');
   document.getElementById('tab-orders').classList.toggle('active', tab==='orders');
+  document.getElementById('tab-services').classList.toggle('active', tab==='services');
   document.getElementById('buyer-shop-tab').classList.toggle('hidden', tab!=='shop');
   document.getElementById('buyer-orders-tab').classList.toggle('hidden', tab!=='orders');
+  document.getElementById('buyer-services-tab').classList.toggle('hidden', tab!=='services');
   if (tab==='orders') loadBuyerOrders();
+  if (tab==='services') loadServiceGigs();
 }
 
 async function loadBuyerOrders() {
@@ -2752,6 +2757,10 @@ function showServiceDashboard() {
   const emailEl = document.getElementById('spd-user-email');
   if (nameEl)  nameEl.textContent  = currentUser.profile?.name  || 'Service Pro';
   if (emailEl) emailEl.textContent = currentUser.email || '';
+
+  // Load data and show default section
+  showSpdDash('overview');
+  loadMyGigs();
 }
 
 function copyReferralLink() {
@@ -2790,7 +2799,146 @@ function showSpdDash(section) {
 }
 
 // ====================================================
-//  SERVICE PROVIDER — Publish Gig
+//  SERVICE ECONOMY — Browse & Filter (Buyer Side)
+// ====================================================
+let _allServiceGigs = [];
+
+async function loadServiceGigs() {
+  document.getElementById('svc-skeleton').classList.remove('hidden');
+  document.getElementById('svc-grid').classList.add('hidden');
+  document.getElementById('svc-empty').classList.add('hidden');
+
+  try {
+    const { data, error } = await db.from('service_gigs')
+      .select('*, profiles(name, whatsapp)')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    _allServiceGigs = data || [];
+    renderServiceCards(_allServiceGigs);
+  } catch(e) {
+    document.getElementById('svc-skeleton').classList.add('hidden');
+    document.getElementById('svc-empty').classList.remove('hidden');
+  }
+}
+
+function filterServices(category) {
+  // Update active chip
+  document.querySelectorAll('[data-svc]').forEach(c => {
+    c.classList.toggle('active', c.dataset.svc === category);
+  });
+  if (category === 'all') {
+    renderServiceCards(_allServiceGigs);
+  } else {
+    renderServiceCards(_allServiceGigs.filter(g => g.category === category));
+  }
+}
+
+function renderServiceCards(gigs) {
+  document.getElementById('svc-skeleton').classList.add('hidden');
+  document.getElementById('svc-count').textContent = gigs.length;
+
+  if (!gigs.length) {
+    document.getElementById('svc-grid').classList.add('hidden');
+    document.getElementById('svc-empty').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('svc-empty').classList.add('hidden');
+  const grid = document.getElementById('svc-grid');
+  grid.classList.remove('hidden');
+
+  const categoryIcons = {
+    'Plumbing': 'fa-faucet-drip', 'Electrical': 'fa-bolt', 'Cleaning': 'fa-broom',
+    'Tailoring': 'fa-scissors', 'Carpentry': 'fa-hammer', 'Painting': 'fa-paint-roller',
+    'Photography': 'fa-camera', 'Design': 'fa-pen-nib', 'Catering': 'fa-utensils', 'Other': 'fa-tools'
+  };
+  const categoryColors = {
+    'Plumbing': '#3b82f6', 'Electrical': '#f59e0b', 'Cleaning': '#10b981',
+    'Tailoring': '#8b5cf6', 'Carpentry': '#d97706', 'Painting': '#ec4899',
+    'Photography': '#6366f1', 'Design': '#14b8a6', 'Catering': '#f43f5e', 'Other': '#6b7280'
+  };
+
+  grid.innerHTML = gigs.map(g => {
+    const icon = categoryIcons[g.category] || 'fa-tools';
+    const color = categoryColors[g.category] || 'var(--green)';
+    const provName = g.profiles?.name || 'Service Pro';
+    const wa = (g.whatsapp || g.profiles?.whatsapp || '').replace(/\D/g,'');
+    const waLink = wa ? `https://wa.me/${wa}?text=Hi%20${encodeURIComponent(provName)}%2C%20I%20found%20you%20on%20BUYSELL%20and%20I'm%20interested%20in%20your%20service%3A%20${encodeURIComponent(g.title)}` : '#';
+    const thumbImg = (g.portfolio_urls && g.portfolio_urls.length) ? g.portfolio_urls[0] : '';
+    const thumbHtml = thumbImg ? `<img src="${thumbImg}" style="width:100%;height:120px;object-fit:cover">` : `<div style="height:120px;background:linear-gradient(135deg,${color}22,${color}08);display:flex;align-items:center;justify-content:center"><i class="fa-solid ${icon}" style="font-size:2rem;color:${color};opacity:.4"></i></div>`;
+    return `
+    <div class="card" style="overflow:hidden;transition:transform .2s,box-shadow .2s;cursor:default">
+      ${thumbHtml}
+      <div style="padding:1rem">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem">
+          <div style="width:32px;height:32px;border-radius:8px;background:${color}20;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <i class="fa-solid ${icon}" style="color:${color};font-size:.85rem"></i>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:.88rem;line-height:1.3">${escHtml(g.title)}</div>
+            <div style="font-size:.7rem;color:var(--text3)">${escHtml(g.category)} · ${escHtml(g.location || '—')}</div>
+          </div>
+        </div>
+        <p style="font-size:.78rem;color:var(--text2);line-height:1.55;margin-bottom:.65rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${escHtml(g.description || 'No description provided.')}</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+          <div>
+            <div style="font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">Starting from</div>
+            <div style="font-size:1.1rem;font-weight:800;color:var(--green)">₦${(g.starting_rate || g.price || 0).toLocaleString()}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.35rem">
+            <div style="width:24px;height:24px;border-radius:50%;background:var(--green-xlt);display:flex;align-items:center;justify-content:center">
+              <i class="fa-solid fa-user" style="font-size:.6rem;color:var(--green)"></i>
+            </div>
+            <span style="font-size:.75rem;font-weight:600">${escHtml(provName)}</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="viewProviderProfile('${g.provider_id}')">
+            <i class="fa-solid fa-user"></i> View Profile
+          </button>
+          <a href="${waLink}" target="_blank" class="btn btn-primary btn-sm" style="flex:1;text-decoration:none">
+            <i class="fa-brands fa-whatsapp"></i> Contact
+          </a>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ====================================================
+//  SERVICE PROVIDER — Load My Gigs (Portfolio)
+// ====================================================
+async function loadMyGigs() {
+  if (!currentUser) return;
+  try {
+    const { data } = await db.from('service_gigs')
+      .select('*')
+      .eq('provider_id', currentUser.id)
+      .order('created_at', { ascending: false });
+    const gigs = data || [];
+    const countEl = document.getElementById('spd-gigs');
+    if (countEl) countEl.textContent = gigs.length;
+    const listEl = document.getElementById('spd-gigs-list');
+    if (!listEl) return;
+    if (!gigs.length) {
+      listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-folder-open" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">Your portfolio is empty. Post your first service above!</p></div>';
+      return;
+    }
+    listEl.innerHTML = gigs.map(g => `
+      <div class="card card-pad mb-2" style="border-left:3px solid var(--green)">
+        <div class="flex justify-between items-center flex-wrap gap-2">
+          <div>
+            <div class="font-bold">${escHtml(g.title)}</div>
+            <div class="text-xs color-text3">${escHtml(g.category)} · ${escHtml(g.location || '')} · ₦${(g.starting_rate||0).toLocaleString()}</div>
+          </div>
+          <span class="badge ${g.status==='active'?'badge-green':'badge-red'}">${g.status}</span>
+        </div>
+      </div>`).join('');
+  } catch(e) { /* silent */ }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — Publish Gig (with Image Upload)
 // ====================================================
 async function publishServiceGig() {
   if (!currentUser) { showModal('auth-modal'); return; }
@@ -2800,10 +2948,28 @@ async function publishServiceGig() {
   const location = document.getElementById('spd-location')?.value.trim();
   const desc     = document.getElementById('spd-desc')?.value.trim();
   const wa       = document.getElementById('spd-wa')?.value.trim();
+  const imgInput = document.getElementById('spd-images');
+  const files    = imgInput?.files ? Array.from(imgInput.files).slice(0, 4) : [];
+
   if (!title || !rate || !location || !desc || !wa) {
     toast('Please fill all fields', '', 'warn'); return;
   }
+
   try {
+    toast('Publishing...', 'Uploading your gig', 'info', 3000);
+
+    // Upload portfolio images
+    let imageUrls = [];
+    for (const file of files) {
+      const ext = file.name.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g,'');
+      const path = `gigs/${currentUser.id}/${Date.now()}_${Math.random().toString(36).substr(2,5)}.${ext}`;
+      const { data, error: upErr } = await db.storage.from('uploads').upload(path, file, { upsert: false });
+      if (!upErr && data) {
+        const { data: urlData } = db.storage.from('uploads').getPublicUrl(data.path);
+        if (urlData?.publicUrl) imageUrls.push(urlData.publicUrl);
+      }
+    }
+
     const { error } = await db.from('service_gigs').insert({
       provider_id:   currentUser.id,
       title:         validateInput(title),
@@ -2812,18 +2978,93 @@ async function publishServiceGig() {
       location:      validateInput(location),
       description:   validateInput(desc),
       whatsapp:      wa,
+      portfolio_urls: imageUrls,
       status:        'active',
       created_at:    new Date().toISOString()
     });
     if (error) throw error;
-    toast('Service Published! \uD83C\uDF89', 'Your gig is now live on BUYSELL', 'success');
+
+    toast('Service Published! 🎉', 'Your gig is now live on BUYSELL', 'success');
     ['spd-title','spd-rate','spd-location','spd-desc','spd-wa'].forEach(id => {
       const el = document.getElementById(id); if (el) el.value = '';
     });
+    if (imgInput) imgInput.value = '';
+    document.getElementById('spd-img-preview').innerHTML = '';
     const gigsEl = document.getElementById('spd-gigs');
     if (gigsEl) gigsEl.textContent = parseInt(gigsEl.textContent || '0') + 1;
+    loadMyGigs();
   } catch(e) {
     toast('Publish Failed', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — Image Preview
+// ====================================================
+document.addEventListener('DOMContentLoaded', () => {
+  const imgInput = document.getElementById('spd-images');
+  if (imgInput) {
+    imgInput.addEventListener('change', () => {
+      const preview = document.getElementById('spd-img-preview');
+      preview.innerHTML = '';
+      const files = Array.from(imgInput.files).slice(0, 4);
+      files.forEach(f => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          preview.innerHTML += `<img src="${e.target.result}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;border:2px solid var(--border)">`;
+        };
+        reader.readAsDataURL(f);
+      });
+      if (imgInput.files.length > 4) toast('Max 4 images', 'Only the first 4 will be uploaded', 'warn');
+    });
+  }
+});
+
+// ====================================================
+//  VIEW PROVIDER PROFILE (Buyer Side)
+// ====================================================
+async function viewProviderProfile(providerId) {
+  showModal('sp-profile-modal');
+
+  try {
+    const { data: provider } = await db.from('profiles').select('*').eq('id', providerId).single();
+    const { data: gigs } = await db.from('service_gigs').select('*').eq('provider_id', providerId).eq('status', 'active').order('created_at', { ascending: false });
+
+    const name = provider?.name || 'Service Pro';
+    const wa = (provider?.whatsapp || '').replace(/\D/g, '');
+    const allGigs = gigs || [];
+    const mainGig = allGigs[0];
+
+    document.getElementById('sp-p-name').textContent = name;
+    document.getElementById('sp-p-category').innerHTML = '<i class="fa-solid fa-tag"></i> ' + (mainGig?.category || 'General');
+    document.getElementById('sp-p-location').innerHTML = '<i class="fa-solid fa-map-pin"></i> ' + (mainGig?.location || 'Nigeria');
+    document.getElementById('sp-p-gig-count').textContent = allGigs.length;
+    document.getElementById('sp-p-bio').textContent = provider?.store_description || mainGig?.description || 'No bio available.';
+
+    // Services & Pricing
+    const svcList = document.getElementById('sp-p-services-list');
+    svcList.innerHTML = allGigs.length
+      ? allGigs.map(g => `<div style="display:flex;align-items:center;justify-content:space-between;padding:.65rem .85rem;background:var(--cream);border-radius:10px;border:1px solid var(--border)"><div><div style="font-weight:600;font-size:.85rem">${escHtml(g.title)}</div><div style="font-size:.72rem;color:var(--text3)">${escHtml(g.category)}</div></div><div style="font-weight:800;color:var(--green);font-size:.95rem">\u20A6${(g.starting_rate||g.price||0).toLocaleString()}</div></div>`).join('')
+      : '<p class="color-text3 text-sm">No services listed.</p>';
+
+    // Portfolio Gallery
+    const allImages = allGigs.flatMap(g => g.portfolio_urls || []);
+    const gallery = document.getElementById('sp-p-gallery');
+    gallery.innerHTML = allImages.length
+      ? allImages.map(url => `<img src="${url}" style="width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer;border-radius:6px" onclick="window.open('${url}','_blank')">`).join('')
+      : '<p class="color-text3 text-sm" style="grid-column:1/-1;text-align:center;padding:1rem">No portfolio images yet.</p>';
+
+    // Reviews placeholder
+    document.getElementById('sp-p-rating').textContent = '5.0';
+    document.getElementById('sp-p-reviews-count').textContent = '0';
+    document.getElementById('sp-p-reviews').innerHTML = '<p class="color-text3 text-sm">No reviews yet. Be the first to hire and review!</p>';
+
+    // WhatsApp CTA
+    document.getElementById('sp-p-wa-btn').href = wa
+      ? `https://wa.me/${wa}?text=Hi%20${encodeURIComponent(name)}%2C%20I%20found%20you%20on%20BUYSELL%20and%20I'd%20like%20to%20hire%20you.`
+      : '#';
+  } catch(e) {
+    console.error('Profile load error:', e);
   }
 }
 
@@ -2831,3 +3072,4 @@ async function publishServiceGig() {
 //  HELP MODAL
 // ====================================================
 function openHelpModal() { showModal('help-modal'); }
+
