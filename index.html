@@ -1396,6 +1396,7 @@
         <a href="#" class="dash-nav-item" id="ap-nav-orders" onclick="switchAdminTab('orders');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-receipt"></i> Orders</a>
         <a href="#" class="dash-nav-item" id="ap-nav-disputes" onclick="switchAdminTab('disputes');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-gavel"></i> Disputes</a>
         <a href="#" class="dash-nav-item" id="ap-nav-withdrawals" onclick="switchAdminTab('withdrawals');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-coins"></i> Payouts</a>
+        <a href="#" class="dash-nav-item" id="ap-nav-receipts" onclick="switchAdminTab('receipts');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-file-invoice"></i> Receipts</a>
         <a href="#" class="dash-nav-item" id="ap-nav-broadcast" onclick="switchAdminTab('broadcast');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-bullhorn"></i> Broadcast</a>
         <a href="#" class="dash-nav-item" id="ap-nav-ai" onclick="switchAdminTab('ai');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-robot"></i> AI Assistant</a>
         <a href="#" class="dash-nav-item" id="ap-nav-branding" onclick="switchAdminTab('branding');event.preventDefault()" style="margin-bottom:.3rem;display:flex"><i class="fa-solid fa-paint-brush"></i> Branding</a>
@@ -1562,6 +1563,29 @@
             <div style="display:flex;gap:.5rem">
               <input type="text" id="admin-ai-input" class="form-input" placeholder="Ask anything about your platform…" onkeypress="if(event.key==='Enter')askAdminBot()">
               <button class="btn btn-primary" onclick="askAdminBot()" style="flex-shrink:0"><i class="fa-solid fa-paper-plane"></i></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ RECEIPTS TAB ═══ -->
+        <div id="adm-tab-receipts" class="adm-tab hidden">
+          <h2 class="mb-1"><i class="fa-solid fa-file-invoice color-green"></i> Commission Receipts</h2>
+          <p class="color-text3 text-sm mb-3">Review and approve seller commission payment proofs (₦5,000/month).</p>
+          <div class="stats-grid mb-4" style="grid-template-columns:repeat(3,1fr)">
+            <div class="stat-card"><div class="stat-value color-gold" id="rcpt-pending">0</div><div class="stat-label">Pending</div></div>
+            <div class="stat-card"><div class="stat-value color-green" id="rcpt-approved">0</div><div class="stat-label">Approved</div></div>
+            <div class="stat-card"><div class="stat-value color-red" id="rcpt-rejected">0</div><div class="stat-label">Rejected</div></div>
+          </div>
+          <div class="card overflow-hidden">
+            <div class="overflow-x">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Seller</th><th>Date</th><th>Reference</th><th>Receipt</th><th>Status</th><th>Actions</th>
+                </tr></thead>
+                <tbody id="rcpt-table-body">
+                  <tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text3)">No receipts submitted yet</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
