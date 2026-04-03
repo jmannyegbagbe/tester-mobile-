@@ -986,6 +986,12 @@
       <div class="form-group"><label class="form-label">Email <span class="req">*</span></label><input type="email" id="auth-email" class="form-input" required placeholder="you@email.com" autocomplete="email"></div>
       <div class="form-group"><label class="form-label">Password <span class="req">*</span></label><input type="password" id="auth-password" class="form-input" required placeholder="Min 6 characters" autocomplete="current-password"></div>
       <div id="auth-wa-group" class="form-group hidden"><label class="form-label">WhatsApp Number <span class="req">*</span></label><input type="tel" id="auth-wa" class="form-input" placeholder="0801 234 5678" inputmode="tel"></div>
+      <div id="auth-terms-group" class="form-group hidden" style="margin-bottom:.75rem">
+        <label style="display:flex;align-items:flex-start;gap:.5rem;cursor:pointer;font-size:.78rem;color:var(--text2);line-height:1.5">
+          <input type="checkbox" id="auth-terms-check" style="margin-top:3px;accent-color:var(--green);min-width:16px">
+          <span>I agree to BUYSELL Nigeria's <a href="#" onclick="event.preventDefault();event.stopPropagation();showModal('terms-modal')" style="color:var(--green);text-decoration:underline;font-weight:600">Terms of Service</a>, <a href="#" onclick="event.preventDefault();event.stopPropagation();showModal('privacy-modal')" style="color:var(--green);text-decoration:underline;font-weight:600">Privacy Policy</a>, and <a href="#" onclick="event.preventDefault();event.stopPropagation();showModal('terms-modal')" style="color:var(--green);text-decoration:underline;font-weight:600">Marketplace Agreement</a></span>
+        </label>
+      </div>
       <button type="submit" class="btn btn-primary btn-full btn-lg" id="auth-btn"><span id="auth-btn-text">Sign In</span><span id="auth-spinner" class="spinner hidden"></span></button>
       <div id="forgot-link-row" style="text-align:center;margin-top:.65rem">
         <button type="button" class="btn btn-ghost btn-sm" style="color:var(--text3);font-size:.8rem" onclick="toggleAuth('forgot')">Forgot password?</button>
@@ -1036,13 +1042,115 @@
           </div>
         </div>
         <div id="modal-negotiable-note" class="hidden"><div style="background:var(--green-xlt);border:1px solid rgba(25,168,71,.2);border-radius:var(--radius-sm);padding:.55rem .85rem;font-size:.77rem;color:#15803d;margin-bottom:.75rem"><i class="fa-solid fa-handshake"></i> Negotiable – WhatsApp the seller to discuss price!</div></div>
+        <!-- Review Summary Bar (shown before buy buttons like Jumia) -->
+        <div id="modal-review-summary" style="background:linear-gradient(135deg,#f0fdf4,#ecfdf5);border:1px solid rgba(25,168,71,.15);border-radius:12px;padding:.85rem 1rem;margin-bottom:.75rem">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+            <div style="text-align:center">
+              <div id="modal-avg-rating" style="font-size:1.8rem;font-weight:800;color:var(--green);line-height:1">0.0</div>
+              <div style="font-size:.65rem;color:var(--text3)">out of 5</div>
+            </div>
+            <div style="flex:1">
+              <div id="modal-rating-bars" style="display:flex;flex-direction:column;gap:3px"></div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:.72rem;color:var(--text3)"><i class="fa-solid fa-shield-check" style="color:var(--green)"></i> <span id="modal-verified-count">0</span> verified purchase reviews</div>
+            <button class="btn btn-outline btn-sm" style="font-size:.7rem" onclick="openReviewModal()"><i class="fa-solid fa-pen"></i> Write Review</button>
+          </div>
+        </div>
         <div id="modal-reviews-section">
-          <div class="divider"></div>
-          <div class="flex justify-between items-center mb-3"><h4 style="font-size:.92rem">Customer Reviews</h4><button class="btn btn-outline btn-sm" onclick="openReviewModal()"><i class="fa-solid fa-pen"></i> Write Review</button></div>
+          <div class="flex justify-between items-center mb-3"><h4 style="font-size:.92rem">Customer Reviews</h4><span class="text-xs color-text3" id="modal-review-sort">Most recent first</span></div>
           <div id="modal-reviews-list"></div>
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- TERMS OF SERVICE MODAL -->
+<div id="terms-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:620px;max-height:85vh;overflow-y:auto;padding:2rem">
+    <button class="modal-close" onclick="closeModal('terms-modal')"><i class="fa-solid fa-times"></i></button>
+    <div style="text-align:center;margin-bottom:1.25rem">
+      <div class="brand-icon" style="width:42px;height:42px;font-size:1.1rem;margin:0 auto .5rem">B</div>
+      <h2 style="font-size:1.15rem">Terms of Service & Marketplace Agreement</h2>
+      <p class="text-xs color-text3">Last updated: April 2026</p>
+    </div>
+    <div style="font-size:.82rem;color:var(--text2);line-height:1.7">
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-handshake color-green"></i> 1. General Terms</h4>
+      <p style="margin-bottom:.85rem">By creating an account on BUYSELL Nigeria, you agree to be bound by these Terms of Service. BUYSELL operates as a marketplace platform connecting buyers, sellers, and service providers. We do not directly sell products or services — we provide the platform infrastructure.</p>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-store color-green"></i> 2. Seller Obligations</h4>
+      <ul style="margin-bottom:.85rem;padding-left:1.1rem">
+        <li>All listed products must be genuine and accurately described.</li>
+        <li>Sellers must respond to orders within 24 hours.</li>
+        <li>After the free trial period, a monthly commission of <strong>₦5,000</strong> is required to maintain an active store.</li>
+        <li>Failure to pay commission will result in automatic store suspension.</li>
+        <li>Fraudulent or misleading listings will result in immediate account termination.</li>
+      </ul>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-shopping-bag color-green"></i> 3. Buyer Protection</h4>
+      <ul style="margin-bottom:.85rem;padding-left:1.1rem">
+        <li>All purchases via Paystack are protected by BUYSELL's Buyer Protection policy.</li>
+        <li>If a product doesn't match its description, buyers can open a dispute within 7 days of delivery.</li>
+        <li>Bank transfer payments — buyers must upload payment proof. Disputes are resolved by admin review.</li>
+        <li>Reviews must reflect genuine purchasing experiences. Fake reviews will be removed.</li>
+      </ul>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-tools color-green"></i> 4. Service Provider Agreement</h4>
+      <ul style="margin-bottom:.85rem;padding-left:1.1rem">
+        <li>Service providers must accurately describe their skills, experience, and pricing.</li>
+        <li>All work must be delivered as agreed with the client.</li>
+        <li>Communication must remain professional. BUYSELL reserves the right to remove inappropriate content.</li>
+        <li>Service providers are independent contractors, not employees of BUYSELL Nigeria.</li>
+      </ul>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-ban" style="color:var(--red)"></i> 5. Prohibited Activities</h4>
+      <ul style="margin-bottom:.85rem;padding-left:1.1rem">
+        <li>Selling counterfeit, stolen, or illegal goods.</li>
+        <li>Manipulating reviews or ratings.</li>
+        <li>Harassing other users.</li>
+        <li>Using the platform for money laundering or fraudulent transactions.</li>
+        <li>Attempting to bypass platform fees or commission payments.</li>
+      </ul>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-gavel color-green"></i> 6. Dispute Resolution</h4>
+      <p style="margin-bottom:.85rem">Disputes between buyers and sellers are handled by the BUYSELL admin team. Both parties must provide evidence. Admin decisions are final. Unresolved disputes may be escalated to the appropriate Nigerian consumer protection authority.</p>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-shield-halved color-green"></i> 7. Account Termination</h4>
+      <p style="margin-bottom:.85rem">BUYSELL reserves the right to suspend or terminate any account that violates these terms. Suspended accounts may appeal by contacting support within 14 days.</p>
+
+      <div style="background:var(--cream);border-radius:10px;padding:.85rem 1rem;border:1px solid var(--border);margin-top:.5rem">
+        <p style="font-size:.78rem;color:var(--text3);margin:0"><i class="fa-solid fa-info-circle color-green"></i> By clicking "I agree" and creating your account, you acknowledge that you have read, understood, and agree to be bound by these Terms. For questions, contact <strong>support@buysell.ng</strong></p>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-full mt-3" onclick="document.getElementById('auth-terms-check').checked=true;closeModal('terms-modal')"><i class="fa-solid fa-check"></i> I Agree to the Terms</button>
+  </div>
+</div>
+
+<!-- PRIVACY POLICY MODAL -->
+<div id="privacy-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:620px;max-height:85vh;overflow-y:auto;padding:2rem">
+    <button class="modal-close" onclick="closeModal('privacy-modal')"><i class="fa-solid fa-times"></i></button>
+    <div style="text-align:center;margin-bottom:1.25rem">
+      <div class="brand-icon" style="width:42px;height:42px;font-size:1.1rem;margin:0 auto .5rem">B</div>
+      <h2 style="font-size:1.15rem">Privacy Policy</h2>
+      <p class="text-xs color-text3">Last updated: April 2026</p>
+    </div>
+    <div style="font-size:.82rem;color:var(--text2);line-height:1.7">
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-database color-green"></i> Data We Collect</h4>
+      <p style="margin-bottom:.85rem">We collect your name, email address, phone number, and transaction history to provide marketplace services. Payment data is processed securely by Paystack and never stored on our servers.</p>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-lock color-green"></i> How We Protect Your Data</h4>
+      <p style="margin-bottom:.85rem">All data is encrypted in transit (SSL/TLS) and stored securely via Supabase infrastructure. We never sell your personal information to third parties.</p>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-share-nodes color-green"></i> Information Sharing</h4>
+      <p style="margin-bottom:.85rem">Delivery details are shared only with sellers to fulfill orders. Service provider contact info (WhatsApp) is visible to potential clients on the platform. We may share data with law enforcement when legally required.</p>
+
+      <h4 style="color:var(--text);margin-bottom:.4rem"><i class="fa-solid fa-user-gear color-green"></i> Your Rights</h4>
+      <p style="margin-bottom:.85rem">You may request deletion of your account and data at any time by contacting support@buysell.ng. Nigerian data protection regulations (NDPR) apply.</p>
+    </div>
+    <button class="btn btn-primary btn-full mt-3" onclick="closeModal('privacy-modal')"><i class="fa-solid fa-check"></i> I Understand</button>
   </div>
 </div>
 
