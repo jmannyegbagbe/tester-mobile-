@@ -2827,18 +2827,23 @@ function importDropshipProduct(btn, productId) {
 
 
 function showSpdDash(section) {
-  // Hide all sections
-  document.querySelectorAll('.spd-section').forEach(s => s.style.display = 'none');
+  // Hide all sections by adding .hidden class
+  document.querySelectorAll('.spd-section').forEach(s => s.classList.add('hidden'));
   // Deactivate all nav items
   document.querySelectorAll('#spd-sidebar .dash-nav-item').forEach(n => n.classList.remove('active'));
   
-  // Show target
+  // Show target by removing .hidden class
   const el = document.getElementById(`spd-sec-${section}`);
-  if (el) el.style.display = 'block';
+  if (el) el.classList.remove('hidden');
   
   // Activate target nav
   const navEl = document.getElementById(`spd-nav-${section}`);
   if (navEl) navEl.classList.add('active');
+
+  // Load section-specific data
+  if (section === 'overview')  loadSpdOverview();
+  if (section === 'portfolio') loadMyGigs();
+  if (section === 'settings')  loadSpdSettings();
 }
 
 // ====================================================
@@ -2949,6 +2954,89 @@ function renderServiceCards(gigs) {
 }
 
 // ====================================================
+//  SERVICE PROVIDER — Overview Stats
+// ====================================================
+async function loadSpdOverview() {
+  if (!currentUser) return;
+  try {
+    // Load gig count
+    const { data: gigs } = await db.from('service_gigs')
+      .select('id, title, category, starting_rate, status, portfolio_urls')
+      .eq('provider_id', currentUser.id);
+    const activeGigs = (gigs || []).filter(g => g.status === 'active');
+    
+    document.getElementById('spd-gigs').textContent = activeGigs.length;
+    // Views and leads are placeholders for now until analytics wired
+    document.getElementById('spd-views').textContent = activeGigs.length * 12; // estimated
+    document.getElementById('spd-leads').textContent = activeGigs.length > 0 ? Math.floor(activeGigs.length * 3) : 0;
+
+    // Populate recent leads section with active gig summary cards
+    const leadsContainer = document.querySelector('#spd-sec-overview .card.card-pad.mb-4');
+    if (leadsContainer && activeGigs.length > 0) {
+      leadsContainer.innerHTML = `
+        <h3 class="mb-3"><i class="fa-solid fa-briefcase"></i> Your Active Services</h3>
+        ${activeGigs.map(g => {
+          const thumb = (g.portfolio_urls && g.portfolio_urls.length) ? g.portfolio_urls[0] : '';
+          return `<div style="display:flex;align-items:center;gap:.75rem;padding:.6rem;background:var(--cream);border-radius:10px;border:1px solid var(--border);margin-bottom:.5rem">
+            ${thumb ? `<img src="${thumb}" style="width:48px;height:48px;object-fit:cover;border-radius:8px;flex-shrink:0">` : `<div style="width:48px;height:48px;border-radius:8px;background:var(--green-xlt);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa-solid fa-tools" style="color:var(--green)"></i></div>`}
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;font-size:.85rem">${escHtml(g.title)}</div>
+              <div style="font-size:.72rem;color:var(--text3)">${escHtml(g.category)} · ₦${(g.starting_rate||0).toLocaleString()}</div>
+            </div>
+            <span class="badge ${g.status==='active'?'badge-green':'badge-red'}">${g.status}</span>
+          </div>`;
+        }).join('')}`;
+    }
+  } catch(e) { console.error('SPD overview error:', e); }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — Settings
+// ====================================================
+async function loadSpdSettings() {
+  if (!currentUser?.profile) return;
+  const p = currentUser.profile;
+  const nameEl = document.getElementById('spd-s-name');
+  const waEl   = document.getElementById('spd-s-wa');
+  const bioEl  = document.getElementById('spd-s-bio');
+  if (nameEl) nameEl.value = p.name || '';
+  if (waEl)   waEl.value   = p.whatsapp || '';
+  if (bioEl)  bioEl.value  = p.store_description || '';
+}
+
+async function saveServiceProfile() {
+  if (!currentUser) return;
+  const name = document.getElementById('spd-s-name')?.value.trim();
+  const wa   = document.getElementById('spd-s-wa')?.value.trim();
+  const bio  = document.getElementById('spd-s-bio')?.value.trim();
+
+  if (!name) { toast('Name required', '', 'warn'); return; }
+
+  try {
+    const { error } = await db.from('profiles').update({
+      name:              validateInput(name),
+      whatsapp:          wa,
+      store_description: validateInput(bio),
+      updated_at:        new Date().toISOString()
+    }).eq('id', currentUser.id);
+    
+    if (error) throw error;
+    
+    // Update local profile
+    currentUser.profile.name = name;
+    currentUser.profile.whatsapp = wa;
+    currentUser.profile.store_description = bio;
+    
+    // Update sidebar display
+    document.getElementById('spd-user-name').textContent = name;
+    
+    toast('Profile Saved! ✅', 'Your changes are now live.', 'success');
+  } catch(e) {
+    toast('Save Failed', e.message, 'error');
+  }
+}
+
+// ====================================================
 //  SERVICE PROVIDER — Load My Gigs (Portfolio)
 // ====================================================
 async function loadMyGigs() {
@@ -2960,24 +3048,59 @@ async function loadMyGigs() {
       .order('created_at', { ascending: false });
     const gigs = data || [];
     const countEl = document.getElementById('spd-gigs');
-    if (countEl) countEl.textContent = gigs.length;
+    if (countEl) countEl.textContent = gigs.filter(g => g.status === 'active').length;
     const listEl = document.getElementById('spd-gigs-list');
     if (!listEl) return;
     if (!gigs.length) {
       listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-folder-open" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">Your portfolio is empty. Post your first service above!</p></div>';
       return;
     }
-    listEl.innerHTML = gigs.map(g => `
-      <div class="card card-pad mb-2" style="border-left:3px solid var(--green)">
-        <div class="flex justify-between items-center flex-wrap gap-2">
-          <div>
-            <div class="font-bold">${escHtml(g.title)}</div>
-            <div class="text-xs color-text3">${escHtml(g.category)} · ${escHtml(g.location || '')} · ₦${(g.starting_rate||0).toLocaleString()}</div>
+    listEl.innerHTML = gigs.map(g => {
+      const thumb = (g.portfolio_urls && g.portfolio_urls.length) ? g.portfolio_urls[0] : '';
+      const imgCount = (g.portfolio_urls || []).length;
+      return `
+      <div class="card mb-3" style="overflow:hidden;border-left:3px solid ${g.status==='active'?'var(--green)':'var(--red)'}">
+        <div style="display:flex;gap:.75rem;padding:1rem">
+          ${thumb 
+            ? `<img src="${thumb}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;flex-shrink:0">`
+            : `<div style="width:72px;height:72px;border-radius:10px;background:var(--green-xlt);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa-solid fa-tools" style="color:var(--green);font-size:1.3rem"></i></div>`
+          }
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;justify-content:space-between;align-items:start;gap:.5rem">
+              <div>
+                <div style="font-weight:700;font-size:.92rem">${escHtml(g.title)}</div>
+                <div style="font-size:.72rem;color:var(--text3);margin-top:.15rem">${escHtml(g.category)} · ${escHtml(g.location || '—')}</div>
+              </div>
+              <span class="badge ${g.status==='active'?'badge-green':'badge-red'}">${g.status}</span>
+            </div>
+            <p style="font-size:.78rem;color:var(--text2);margin-top:.4rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.45">${escHtml(g.description || 'No description')}</p>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:.6rem">
+              <div style="display:flex;align-items:center;gap:.75rem">
+                <span style="font-weight:800;color:var(--green);font-size:.95rem">₦${(g.starting_rate||0).toLocaleString()}</span>
+                ${imgCount > 0 ? `<span style="font-size:.7rem;color:var(--text3)"><i class="fa-solid fa-images"></i> ${imgCount} photo${imgCount>1?'s':''}</span>` : ''}
+              </div>
+              <button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:.72rem" onclick="deleteGig('${g.id}')">
+                <i class="fa-solid fa-trash"></i> Delete
+              </button>
+            </div>
           </div>
-          <span class="badge ${g.status==='active'?'badge-green':'badge-red'}">${g.status}</span>
         </div>
-      </div>`).join('');
-  } catch(e) { /* silent */ }
+      </div>`;
+    }).join('');
+  } catch(e) { console.error('loadMyGigs error:', e); }
+}
+
+async function deleteGig(gigId) {
+  if (!confirm('Delete this gig? This cannot be undone.')) return;
+  try {
+    const { error } = await db.from('service_gigs').delete().eq('id', gigId).eq('provider_id', currentUser.id);
+    if (error) throw error;
+    toast('Gig Deleted', '', 'success');
+    loadMyGigs();
+    loadSpdOverview();
+  } catch(e) {
+    toast('Delete Failed', e.message, 'error');
+  }
 }
 
 // ====================================================
