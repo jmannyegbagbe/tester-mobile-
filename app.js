@@ -122,6 +122,7 @@ function toggleAuth(mode) {
   document.getElementById('auth-role-group').classList.toggle('hidden', isLogin);
   const selRole = document.querySelector('input[name="auth-role-radio"]:checked')?.value || 'buyer';
   document.getElementById('auth-wa-group').classList.toggle('hidden', isLogin || selRole === 'buyer');
+  document.getElementById('auth-terms-group').classList.toggle('hidden', isLogin);
   document.getElementById('auth-btn-text').textContent = isLogin ? 'Sign In' : 'Create Account';
   document.getElementById('auth-password').setAttribute('autocomplete', isLogin ? 'current-password' : 'new-password');
   if (isSignup) selectRole('buyer');
@@ -187,6 +188,10 @@ async function handleAuth(e) {
 
       if (!name) { toast('Name required', 'Please enter your full name', 'warn'); return; }
       if (password.length < 6) { toast('Password too short', 'Minimum 6 characters', 'warn'); return; }
+      if (!document.getElementById('auth-terms-check')?.checked) {
+        toast('Terms Required', 'Please agree to the Terms of Service and Privacy Policy', 'warn', 5000);
+        return;
+      }
 
       const role     = rawRole === 'both' ? 'seller' : rawRole;
       const accounts = rawRole;
@@ -852,19 +857,43 @@ async function openProduct(id) {
 async function loadProductReviews(productId) {
   const { data } = await db.from('reviews').select('*,profiles(name)').eq('product_id', productId).order('created_at', { ascending: false }).limit(10);
   const reviews = data || [];
-  document.getElementById('modal-review-count').textContent = `${reviews.length} review${reviews.length!==1?'s':''}`;
-  const avgR = reviews.length ? (reviews.reduce((s,r)=>s+r.rating,0)/reviews.length).toFixed(1) : '5.0';
-  document.getElementById('modal-stars').textContent = '★'.repeat(Math.round(+avgR)) + '☆'.repeat(5-Math.round(+avgR));
+  const count = reviews.length;
+  document.getElementById('modal-review-count').textContent = `${count} review${count!==1?'s':''}`;
+  document.getElementById('modal-verified-count').textContent = count;
+
+  // Calculate average and star distribution
+  const avg = count ? (reviews.reduce((s,r)=>s+r.rating,0)/count) : 0;
+  document.getElementById('modal-avg-rating').textContent = avg.toFixed(1);
+  document.getElementById('modal-stars').textContent = '★'.repeat(Math.round(avg)) + '☆'.repeat(5-Math.round(avg));
+
+  // Star distribution bars (5→1)
+  const barsEl = document.getElementById('modal-rating-bars');
+  barsEl.innerHTML = [5,4,3,2,1].map(star => {
+    const starCount = reviews.filter(r => r.rating === star).length;
+    const pct = count ? Math.round((starCount / count) * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:.4rem">
+      <span style="font-size:.62rem;color:var(--text3);width:12px;text-align:right">${star}</span>
+      <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${star>=4?'var(--green)':star>=3?'var(--gold)':'var(--red)'};border-radius:3px;transition:width .3s"></div>
+      </div>
+      <span style="font-size:.58rem;color:var(--text3);width:18px">${starCount}</span>
+    </div>`;
+  }).join('');
+
+  // Review list
   const list = document.getElementById('modal-reviews-list');
-  if (!reviews.length) { list.innerHTML = '<p class="color-text3 text-sm">No reviews yet. Be the first!</p>'; return; }
+  if (!count) { list.innerHTML = '<p class="color-text3 text-sm" style="padding:.5rem 0">No reviews yet. Be the first to share your experience!</p>'; return; }
   list.innerHTML = reviews.map(r => `
     <div class="review-card">
       <div class="flex justify-between items-center">
-        <span class="reviewer-name">${escHtml(r.profiles?.name||'Buyer')}</span>
+        <div style="display:flex;align-items:center;gap:.4rem">
+          <div style="width:26px;height:26px;border-radius:50%;background:var(--green-xlt);display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;color:var(--green)">${(r.profiles?.name||'B')[0].toUpperCase()}</div>
+          <span class="reviewer-name">${escHtml(r.profiles?.name||'Verified Buyer')}</span>
+        </div>
         <div class="stars sm">${'★'.repeat(r.rating)+'☆'.repeat(5-r.rating)}</div>
       </div>
-      <p class="review-text">${escHtml(r.review_text)}</p>
-      <span class="text-xs color-text3">${fmtDate(r.created_at)}</span>
+      <p class="review-text">${escHtml(r.review_text || r.comment || '')}</p>
+      <span class="text-xs color-text3"><i class="fa-solid fa-check-circle" style="color:var(--green)"></i> Verified Purchase · ${fmtDate(r.created_at)}</span>
     </div>`).join('');
 }
 
