@@ -81,6 +81,18 @@
           </div>
           <button class="btn btn-primary btn-full">Open Your Store <i class="fa-solid fa-arrow-right"></i></button>
         </div>
+        <div class="portal-card seller-card delay-3" onclick="enterSite('service_provider')" style="border-color:var(--purple)">
+          <span class="portal-badge" style="background:var(--purple)">NEW</span>
+          <div class="portal-icon" style="background:linear-gradient(135deg,var(--purple),#7c3aed)"><i class="fa-solid fa-tools" style="color:#fff"></i></div>
+          <h2>I'm a Service Pro</h2>
+          <p>Offer your skills — tailoring, cleaning, plumbing, photography, design & more. Get hired by local clients.</p>
+          <div class="portal-features">
+            <div class="portal-feat"><i class="fa-solid fa-briefcase"></i> Service Portfolio</div>
+            <div class="portal-feat"><i class="fa-solid fa-naira-sign"></i> Set Your Rates</div>
+            <div class="portal-feat"><i class="fa-brands fa-whatsapp"></i> Direct Leads</div>
+          </div>
+          <button class="btn btn-full" style="background:var(--purple);color:#fff">Start Earning <i class="fa-solid fa-arrow-right"></i></button>
+        </div>
       </div>
     </div>
   </main>
@@ -203,6 +215,7 @@
     <div class="buyer-tabs">
       <button class="buyer-tab active" id="tab-shop" onclick="switchBuyerTab('shop')">🛍️ Shop</button>
       <button class="buyer-tab" id="tab-orders" onclick="switchBuyerTab('orders')">📦 My Orders</button>
+      <button class="buyer-tab" id="tab-services" onclick="switchBuyerTab('services')">🔧 Hire Services</button>
     </div>
 
     <!-- Shop tab -->
@@ -251,6 +264,40 @@
         <i class="fa-solid fa-box-open" style="font-size:2.5rem;color:var(--border2);display:block;margin-bottom:.85rem"></i>
         <p style="color:var(--text3);margin-bottom:1rem">No orders yet.</p>
         <button class="btn btn-primary btn-sm" onclick="switchBuyerTab('shop')">Start Shopping</button>
+      </div>
+    </div>
+
+    <!-- Services tab -->
+    <div id="buyer-services-tab" class="hidden">
+      <div class="section-header mb-3">
+        <div>
+          <h2 class="section-title">Hire a Professional</h2>
+          <div class="section-meta">Verified local service providers on BUYSELL • <span id="svc-count">0</span> available</div>
+        </div>
+      </div>
+      <div class="cats-strip mb-3">
+        <div class="cats-inner">
+          <div class="cat-chip active" onclick="filterServices('all')" data-svc="all"><i class="fa-solid fa-border-all"></i> All</div>
+          <div class="cat-chip" onclick="filterServices('Plumbing')" data-svc="Plumbing"><i class="fa-solid fa-faucet-drip"></i> Plumbing</div>
+          <div class="cat-chip" onclick="filterServices('Electrical')" data-svc="Electrical"><i class="fa-solid fa-bolt"></i> Electrical</div>
+          <div class="cat-chip" onclick="filterServices('Cleaning')" data-svc="Cleaning"><i class="fa-solid fa-broom"></i> Cleaning</div>
+          <div class="cat-chip" onclick="filterServices('Tailoring')" data-svc="Tailoring"><i class="fa-solid fa-scissors"></i> Tailoring</div>
+          <div class="cat-chip" onclick="filterServices('Carpentry')" data-svc="Carpentry"><i class="fa-solid fa-hammer"></i> Carpentry</div>
+          <div class="cat-chip" onclick="filterServices('Painting')" data-svc="Painting"><i class="fa-solid fa-paint-roller"></i> Painting</div>
+          <div class="cat-chip" onclick="filterServices('Photography')" data-svc="Photography"><i class="fa-solid fa-camera"></i> Photography</div>
+          <div class="cat-chip" onclick="filterServices('Design')" data-svc="Design"><i class="fa-solid fa-pen-nib"></i> Design</div>
+          <div class="cat-chip" onclick="filterServices('Catering')" data-svc="Catering"><i class="fa-solid fa-utensils"></i> Catering</div>
+        </div>
+      </div>
+      <div id="svc-skeleton" class="products-grid">
+        <div class="skeleton" style="height:220px"></div><div class="skeleton" style="height:220px"></div>
+        <div class="skeleton" style="height:220px"></div><div class="skeleton" style="height:220px"></div>
+      </div>
+      <div id="svc-grid" class="products-grid hidden"></div>
+      <div id="svc-empty" class="hidden" style="text-align:center;padding:3rem 1rem">
+        <i class="fa-solid fa-tools" style="font-size:2.5rem;color:var(--border2);display:block;margin-bottom:.85rem"></i>
+        <p style="color:var(--text3);margin-bottom:1rem">No service providers found in this category yet.</p>
+        <button class="btn btn-primary btn-sm" onclick="filterServices('all')">Show All Services</button>
       </div>
     </div>
   </div>
@@ -907,7 +954,7 @@
       <div id="auth-name-group" class="form-group hidden"><label class="form-label">Full Name <span class="req">*</span></label><input type="text" id="auth-name" class="form-input" placeholder="Your full name" autocomplete="name"></div>
       <div id="auth-role-group" class="form-group hidden">
         <label class="form-label">I want to… <span class="req">*</span></label>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-top:.35rem">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem;margin-top:.35rem">
           <label id="role-card-buyer" class="role-card active" onclick="selectRole('buyer')">
             <input type="radio" name="auth-role-radio" value="buyer" checked style="display:none">
             <div class="role-card-icon">🛍️</div>
@@ -920,6 +967,12 @@
             <div class="role-card-label">Seller</div>
             <div class="role-card-sub">List & sell</div>
           </label>
+          <label id="role-card-service_provider" class="role-card" onclick="selectRole('service_provider')">
+            <input type="radio" name="auth-role-radio" value="service_provider" style="display:none">
+            <div class="role-card-icon">🔧</div>
+            <div class="role-card-label">Service Pro</div>
+            <div class="role-card-sub">Offer skills</div>
+          </label>
           <label id="role-card-both" class="role-card" onclick="selectRole('both')">
             <input type="radio" name="auth-role-radio" value="both" style="display:none">
             <div class="role-card-icon">🔄</div>
@@ -928,6 +981,7 @@
           </label>
         </div>
         <div id="role-both-note" class="hidden" style="margin-top:.5rem;font-size:.76rem;color:var(--text3);background:var(--cream);border-radius:6px;padding:.5rem .75rem"><i class="fa-solid fa-info-circle color-green"></i> You'll have access to both Buyer and Seller dashboards. Seller features activate after free trial.</div>
+        <div id="role-sp-note" class="hidden" style="margin-top:.5rem;font-size:.76rem;color:var(--text3);background:#f3e8ff;border-radius:6px;padding:.5rem .75rem"><i class="fa-solid fa-tools" style="color:var(--purple)"></i> You'll get a dedicated Service Dashboard to post gigs, set pricing, and connect with local clients via WhatsApp.</div>
       </div>
       <div class="form-group"><label class="form-label">Email <span class="req">*</span></label><input type="email" id="auth-email" class="form-input" required placeholder="you@email.com" autocomplete="email"></div>
       <div class="form-group"><label class="form-label">Password <span class="req">*</span></label><input type="password" id="auth-password" class="form-input" required placeholder="Min 6 characters" autocomplete="current-password"></div>
@@ -1193,6 +1247,73 @@
     </div>
     <div class="form-group"><label class="form-label">Description <span class="req">*</span></label><textarea id="dispute-desc" class="form-textarea" required rows="4" placeholder="Describe the issue in detail…"></textarea></div>
     <button class="btn btn-danger btn-full" onclick="submitDispute()"><i class="fa-solid fa-paper-plane"></i> File Dispute</button>
+  </div>
+</div>
+
+<!-- SERVICE PROVIDER PROFILE MODAL -->
+<div id="sp-profile-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:600px;padding:0;overflow:hidden">
+    <button class="modal-close" onclick="closeModal('sp-profile-modal')" style="z-index:2"><i class="fa-solid fa-times"></i></button>
+    <!-- Header Banner -->
+    <div id="sp-profile-banner" style="background:linear-gradient(135deg,var(--purple),#7c3aed);padding:1.75rem 1.25rem 1rem;color:#fff;position:relative">
+      <div style="display:flex;align-items:center;gap:.85rem">
+        <div style="width:64px;height:64px;border-radius:16px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-size:1.6rem;flex-shrink:0"><i class="fa-solid fa-tools"></i></div>
+        <div>
+          <h2 id="sp-p-name" style="margin:0;font-size:1.25rem;font-weight:700">Provider Name</h2>
+          <div style="display:flex;align-items:center;gap:.6rem;margin-top:.3rem;opacity:.8;font-size:.82rem">
+            <span id="sp-p-category"><i class="fa-solid fa-tag"></i> Category</span>
+            <span id="sp-p-location"><i class="fa-solid fa-map-pin"></i> Location</span>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:.75rem;margin-top:1rem">
+        <div style="background:rgba(255,255,255,.12);border-radius:10px;padding:.5rem .85rem;text-align:center;flex:1">
+          <div id="sp-p-gig-count" style="font-size:1.1rem;font-weight:700">0</div>
+          <div style="font-size:.68rem;opacity:.7">Active Gigs</div>
+        </div>
+        <div style="background:rgba(255,255,255,.12);border-radius:10px;padding:.5rem .85rem;text-align:center;flex:1">
+          <div id="sp-p-rating" style="font-size:1.1rem;font-weight:700">5.0</div>
+          <div style="font-size:.68rem;opacity:.7">Rating</div>
+        </div>
+        <div style="background:rgba(255,255,255,.12);border-radius:10px;padding:.5rem .85rem;text-align:center;flex:1">
+          <div id="sp-p-reviews-count" style="font-size:1.1rem;font-weight:700">0</div>
+          <div style="font-size:.68rem;opacity:.7">Reviews</div>
+        </div>
+      </div>
+    </div>
+    <!-- Body -->
+    <div style="padding:1.25rem">
+      <!-- About -->
+      <div class="mb-3">
+        <h3 style="font-size:.88rem;font-weight:700;margin-bottom:.4rem"><i class="fa-solid fa-user color-green"></i> About</h3>
+        <p id="sp-p-bio" style="font-size:.82rem;color:var(--text2);line-height:1.6">No bio available.</p>
+      </div>
+      <!-- Services & Pricing -->
+      <div class="mb-3">
+        <h3 style="font-size:.88rem;font-weight:700;margin-bottom:.6rem"><i class="fa-solid fa-naira-sign color-gold"></i> Services & Pricing</h3>
+        <div id="sp-p-services-list" style="display:flex;flex-direction:column;gap:.5rem">
+          <p class="color-text3 text-sm">No services listed.</p>
+        </div>
+      </div>
+      <!-- Portfolio Gallery -->
+      <div class="mb-3">
+        <h3 style="font-size:.88rem;font-weight:700;margin-bottom:.6rem"><i class="fa-solid fa-images" style="color:var(--purple)"></i> Portfolio</h3>
+        <div id="sp-p-gallery" style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;border-radius:8px;overflow:hidden">
+          <p class="color-text3 text-sm" style="grid-column:1/-1;text-align:center;padding:1rem">No portfolio images yet.</p>
+        </div>
+      </div>
+      <!-- Reviews -->
+      <div class="mb-3">
+        <h3 style="font-size:.88rem;font-weight:700;margin-bottom:.6rem"><i class="fa-solid fa-star color-gold"></i> Client Reviews</h3>
+        <div id="sp-p-reviews">
+          <p class="color-text3 text-sm">No reviews yet.</p>
+        </div>
+      </div>
+      <!-- CTA -->
+      <a id="sp-p-wa-btn" href="#" target="_blank" class="btn btn-primary btn-full" style="text-decoration:none;font-size:.95rem">
+        <i class="fa-brands fa-whatsapp"></i> Contact on WhatsApp
+      </a>
+    </div>
   </div>
 </div>
 
@@ -1571,6 +1692,11 @@
           <div class="form-group"><label class="form-label">Location <span class="req">*</span></label><input type="text" id="spd-location" class="form-input" placeholder="e.g., Ikeja, Lagos"></div>
           <div class="form-group"><label class="form-label">Description <span class="req">*</span></label><textarea id="spd-desc" class="form-textarea" rows="3" placeholder="Describe your experience, skills, and what makes you the best choice…"></textarea></div>
           <div class="form-group"><label class="form-label">WhatsApp Number <span class="req">*</span></label><input type="tel" id="spd-wa" class="form-input" placeholder="0801 234 5678" inputmode="tel"></div>
+          <div class="form-group">
+            <label class="form-label"><i class="fa-solid fa-images" style="color:var(--purple)"></i> Portfolio Images <span class="text-xs color-text3">(up to 4 images)</span></label>
+            <input type="file" id="spd-images" accept="image/*" multiple class="form-input" style="padding:.5rem">
+            <div id="spd-img-preview" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.5rem"></div>
+          </div>
           <button class="btn btn-primary btn-full" onclick="publishServiceGig()"><i class="fa-solid fa-paper-plane"></i> Publish Service Profile</button>
         </div>
         <div class="card card-pad">
