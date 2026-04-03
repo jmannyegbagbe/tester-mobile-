@@ -1678,6 +1678,27 @@
           </div>
         </div>
 
+        <!-- ═══ KYC VERIFICATION TAB ═══ -->
+        <div id="adm-tab-kyc" class="adm-tab hidden">
+          <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+            <div class="flex gap-2 flex-wrap">
+              <select id="adm-kyc-filter" class="form-select" style="width:auto;padding:.4rem .7rem;font-size:.78rem" onchange="loadAdminKyc()">
+                <option value="pending">Pending Review</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="all">All Submissions</option>
+              </select>
+            </div>
+            <button class="btn btn-outline btn-sm" onclick="loadAdminKyc()"><i class="fa-solid fa-sync"></i> Refresh</button>
+          </div>
+          <div id="adm-kyc-skeleton"><div class="skeleton mb-3" style="height:150px"></div></div>
+          <div id="adm-kyc-list" class="hidden" style="display:flex;flex-direction:column;gap:1rem"></div>
+          <div id="adm-kyc-empty" class="hidden text-center" style="padding:3rem">
+            <i class="fa-solid fa-shield-check" style="font-size:2.5rem;color:var(--green);display:block;margin-bottom:.75rem"></i>
+            <p class="color-text3">No pending KYC verifications</p>
+          </div>
+        </div>
+
         <!-- ═══ BROADCAST TAB ═══ -->
         <div id="adm-tab-broadcast" class="adm-tab hidden">
           <div class="card card-pad-lg" style="max-width:600px">
