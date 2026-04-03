@@ -503,6 +503,7 @@ function showBuyerView() {
 
 function showSellerDashboard() {
   if (!currentUser) { showModal('auth-modal'); toggleAuth('login'); return; }
+  if (!checkAndPromptKyc()) return; // Block unverified access
   document.getElementById('buyer-view').style.display = 'none';
   document.getElementById('seller-dashboard').style.display = 'block';
   document.getElementById('storefront-view').style.display = 'none';
@@ -529,7 +530,11 @@ function showSellerDashboard() {
 
 function toggleView() {
   if (currentRole === 'seller') showBuyerView();
-  else { if (!currentUser) { showModal('auth-modal'); return; } showSellerDashboard(); }
+  else { 
+    if (!currentUser) { showModal('auth-modal'); return; }
+    if (!checkAndPromptKyc()) return; // Block unverified access
+    showSellerDashboard(); 
+  }
 }
 
 function handleNavBrand(e) {
@@ -2332,6 +2337,154 @@ async function loadBroadcastHistory() {
         <div class="text-sm">${escHtml(b.body)}</div>
       </div>`).join('')
     : '<p class="color-text3 text-sm">None sent yet.</p>';
+}
+
+// ====================================================
+//  KYC VERIFICATION SYSTEM
+// ====================================================
+function checkAndPromptKyc() {
+  if (!currentUser?.profile) return false;
+  const role = currentUser.profile.role;
+  if (role !== 'seller' && role !== 'service_provider') return true;
+  
+  if (currentUser.profile.kyc_verified || currentUser.profile.kyc_status === 'approved') return true;
+  
+  const statusEl = document.getElementById('kyc-status-banner');
+  if (currentUser.profile.kyc_status === 'pending') {
+    statusEl.innerHTML = '<i class="fa-solid fa-clock text-xl"></i> <div><b>Verification Pending</b><br>Your KYC documents are currently under review.</div>';
+    statusEl.style.background = '#fef3c7'; statusEl.style.color = '#92400e';
+    statusEl.classList.remove('hidden');
+    document.getElementById('kyc-submit-btn').disabled = true;
+    document.getElementById('kyc-submit-btn').innerHTML = '<i class="fa-solid fa-clock"></i> Under Review';
+    showModal('kyc-modal');
+    return false;
+  }
+  
+  if (currentUser.profile.kyc_status === 'rejected') {
+    statusEl.innerHTML = '<i class="fa-solid fa-exclamation-triangle text-xl"></i> <div><b>Verification Rejected</b><br>Please resubmit your documents with clear photos.</div>';
+    statusEl.style.background = '#fee2e2'; statusEl.style.color = '#b91c1c';
+    statusEl.classList.remove('hidden');
+  }
+
+  showModal('kyc-modal');
+  return false;
+}
+
+async function submitKyc(e) {
+  e.preventDefault();
+  if (!currentUser) return;
+  const btn = document.getElementById('kyc-submit-btn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading...';
+  
+  try {
+    const docType = document.getElementById('kyc-doc-type').value;
+    const docNum  = document.getElementById('kyc-doc-number').value.trim();
+    const name    = document.getElementById('kyc-full-name').value.trim();
+    
+    // Upload files
+    const uploadFile = async (id) => {
+      const el = document.getElementById(id);
+      if (!el.files?.[0]) return null;
+      const file = el.files[0];
+      const ext = file.name.split('.').pop();
+      const path = `kyc/${currentUser.id}/${id}_${Date.now()}.${ext}`;
+      const { error } = await db.storage.from('uploads').upload(path, file);
+      if (error) throw new Error(`Failed to upload ${id}`);
+      return db.storage.from('uploads').getPublicUrl(path).data.publicUrl;
+    };
+
+    const [frontUrl, backUrl, selfieUrl] = await Promise.all([
+      uploadFile('kyc-front'), uploadFile('kyc-back'), uploadFile('kyc-selfie')
+    ]);
+
+    if (!frontUrl || !selfieUrl) throw new Error("Front photo and selfie are required");
+
+    await db.from('kyc_verifications').insert({
+      user_id: currentUser.id,
+      document_type: docType,
+      document_number: docNum,
+      full_name: name,
+      document_front_url: frontUrl,
+      document_back_url: backUrl,
+      selfie_url: selfieUrl,
+      status: 'pending'
+    });
+
+    await db.from('profiles').update({ kyc_status: 'pending' }).eq('id', currentUser.id);
+    currentUser.profile.kyc_status = 'pending';
+    
+    toast('KYC Submitted', ' documents are pending review', 'success');
+    closeModal('kyc-modal');
+    checkAndPromptKyc(); // updates modal UI
+  } catch(e) {
+    toast('Error', e.message, 'error');
+    btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-shield-check"></i> Submit Verification';
+  }
+}
+
+// Admin KYC management
+async function loadAdminKyc() {
+  if (!guardAdminPanel()) return;
+  const filter = document.getElementById('adm-kyc-filter').value;
+  let q = db.from('kyc_verifications').select('*, profiles(name, email, role)').order('created_at', { ascending: false });
+  if (filter !== 'all') q = q.eq('status', filter);
+  
+  const { data: kycs, error } = await q;
+  document.getElementById('adm-kyc-skeleton').classList.add('hidden');
+  const list = document.getElementById('adm-kyc-list');
+  const empty = document.getElementById('adm-kyc-empty');
+  
+  if (error || !kycs?.length) {
+    list.classList.add('hidden'); empty.classList.remove('hidden');
+    return;
+  }
+  
+  list.classList.remove('hidden'); empty.classList.add('hidden');
+  list.innerHTML = kycs.map(k => `
+    <div class="card card-pad mb-3" style="border-left: 4px solid ${k.status==='approved'?'var(--green)':k.status==='rejected'?'var(--red)':'var(--gold)'}">
+      <div class="flex justify-between items-start mb-2 flex-wrap gap-2">
+        <div>
+          <div class="font-bold flex items-center gap-2">${escHtml(k.profiles?.name||'Unknown')} <span class="badge badge-gray">${k.profiles?.role}</span></div>
+          <div class="text-xs color-text3">${escHtml(k.profiles?.email)}</div>
+          <div class="text-sm mt-1"><b>ID:</b> ${escHtml(k.document_number)} (${k.document_type.toUpperCase()})</div>
+          <div class="text-sm"><b>Name on ID:</b> ${escHtml(k.full_name)}</div>
+        </div>
+        <span class="badge ${k.status==='approved'?'badge-green':k.status==='rejected'?'badge-red':'badge-gold'}">${k.status.toUpperCase()}</span>
+      </div>
+      <div class="flex gap-2 flex-wrap mb-3 mt-2">
+        <a href="${k.document_front_url}" target="_blank" class="btn btn-outline btn-sm"><i class="fa-solid fa-id-card"></i> Front</a>
+        ${k.document_back_url ? `<a href="${k.document_back_url}" target="_blank" class="btn btn-outline btn-sm"><i class="fa-solid fa-id-card"></i> Back</a>` : ''}
+        <a href="${k.selfie_url}" target="_blank" class="btn btn-outline btn-sm"><i class="fa-solid fa-user"></i> Selfie</a>
+      </div>
+      ${k.status === 'pending' ? `
+        <div class="flex gap-2 border-t pt-3 mt-2">
+          <button class="btn btn-primary btn-sm flex-1" onclick="adminApproveKyc('${k.id}', '${k.user_id}')"><i class="fa-solid fa-check"></i> Approve KYC</button>
+          <button class="btn btn-outline btn-sm text-red flex-1" onclick="adminRejectKyc('${k.id}', '${k.user_id}')" style="border-color:var(--red);color:var(--red)"><i class="fa-solid fa-times"></i> Reject</button>
+        </div>
+      ` : ''}
+    </div>
+  `).join('');
+}
+
+async function adminApproveKyc(kycId, userId) {
+  if (!confirm('Approve KYC and verify this user?')) return;
+  try {
+    await db.from('kyc_verifications').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', kycId);
+    await db.from('profiles').update({ kyc_status: 'approved', kyc_verified: true }).eq('id', userId);
+    toast('KYC Approved', 'User is now a verified seller.', 'success');
+    loadAdminKyc();
+  } catch(e) { toast('Error', e.message, 'error'); }
+}
+
+async function adminRejectKyc(kycId, userId) {
+  const note = prompt('Reason for rejection:');
+  if (!note) return;
+  try {
+    await db.from('kyc_verifications').update({ status: 'rejected', admin_note: note, reviewed_at: new Date().toISOString() }).eq('id', kycId);
+    await db.from('profiles').update({ kyc_status: 'rejected', kyc_verified: false }).eq('id', userId);
+    toast('KYC Rejected', 'User must resubmit.', 'warn');
+    loadAdminKyc();
+  } catch(e) { toast('Error', e.message, 'error'); }
 }
 
 // ====================================================
