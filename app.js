@@ -3396,9 +3396,21 @@ async function loadMyGigs() {
                 ${imgCount > 0 ? `<span style="font-size:.7rem;color:var(--text3)"><i class="fa-solid fa-images"></i> ${imgCount} photo${imgCount>1?'s':''}</span>` : ''}
               </div>
               <button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:.72rem" onclick="deleteGig('${g.id}')">
-                <i class="fa-solid fa-trash"></i> Delete
+                <i class="fa-solid fa-trash"></i> Delete Gig
               </button>
             </div>
+            
+            ${imgCount > 0 ? `
+              <div style="margin-top: .8rem; display: flex; gap: .5rem; overflow-x: auto; padding-bottom: .2rem">
+                ${(g.portfolio_urls || []).map(url => `
+                  <div style="position:relative; width: 60px; height: 60px; flex-shrink: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border)">
+                    <img src="${url}" style="width:100%; height:100%; object-fit:cover">
+                    <button onclick="deletePortfolioImage('${url}', '${g.id}', event)" title="Delete this image" style="position:absolute; top: 2px; right: 2px; background: rgba(220,38,38,0.9); color: white; border: none; border-radius: 50%; width: 18px; height: 18px; font-size: 10px; cursor: pointer; display: flex; align-items:center; justify-content:center"><i class="fa-solid fa-times"></i></button>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+            
           </div>
         </div>
       </div>`;
@@ -3555,3 +3567,396 @@ async function viewProviderProfile(providerId) {
 // ====================================================
 function openHelpModal() { showModal('help-modal'); }
 
+// ====================================================
+//  MARKETPLACE ADVERTISING (Sellers & Service Providers)
+// ====================================================
+async function previewAdMedia(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const previewContainer = document.getElementById('ad-media-preview-container');
+  const previewEl = document.getElementById('ad-preview-el');
+  previewContainer.classList.remove('hidden');
+
+  const fileUrl = URL.createObjectURL(file);
+  if (file.type.startsWith('video/')) {
+    // Validate duration
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = function() {
+      window.URL.revokeObjectURL(video.src);
+      if (video.duration > 30) {
+        toast('Video too long', 'Maximum length is 30 seconds.', 'error');
+        input.value = '';
+        previewContainer.classList.add('hidden');
+        return;
+      }
+      previewEl.innerHTML = `<video src="${fileUrl}" controls style="width:100%;max-height:200px;border-radius:var(--radius-sm)"></video>`;
+    }
+    video.src = fileUrl;
+  } else {
+    previewEl.innerHTML = `<img src="${fileUrl}" style="width:100%;max-height:200px;object-fit:contain;border-radius:var(--radius-sm)">`;
+  }
+}
+
+async function initiateAdPayment() {
+  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) {
+    return toast('Access Denied', 'Only sellers and service providers can advertise', 'error');
+  }
+
+  const title = document.getElementById('ad-title').value.trim();
+  const desc = document.getElementById('ad-desc').value.trim();
+  const cta = document.getElementById('ad-cta-select').value;
+  const link = document.getElementById('ad-link').value.trim();
+  const fileInput = document.getElementById('ad-media-file');
+  const file = fileInput.files[0];
+
+  if (!title || !desc || !link || !file) {
+    return toast('Incomplete Form', 'Please fill all required fields and upload media', 'error');
+  }
+
+  // Pay ₦10,000 via Paystack
+  const adFee = 10000;
+  const btn = document.getElementById('ad-pay-btn');
+  btn.innerHTML = '<span class="spinner"></span> Processing...';
+  btn.disabled = true;
+
+  try {
+    const { data: profile } = await db.from('profiles').select('email').eq('id', user.id).single();
+    
+    let handler = PaystackPop.setup({
+      key: 'pk_test_b8e5c2cf1d5a7d72856f6ba3a7b6cf7169bed9b7', // Using test key for dev
+      email: profile?.email || user.email || 'advertiser@buysell.ng',
+      amount: adFee * 100, // kobo
+      currency: 'NGN',
+      ref: 'AD_' + Math.floor(Math.random() * 1000000000 + 1),
+      callback: async function(response) {
+        toast('Payment Successful', 'Uploading advertisement...', 'success');
+        
+        // Use existing submitProduct logic for file upload pattern
+        const ext = file.name.split('.').pop();
+        const path = `ads/${user.id}/${Date.now()}.${ext}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage.from('products').upload(path, file);
+        if (uploadErr) throw uploadErr;
+        
+        const { data: { publicUrl } } = supabase.storage.from('products').getPublicUrl(path);
+
+        const adData = {
+          advertiser_id: user.id,
+          advertiser_type: user.user_type,
+          title: title,
+          description: desc,
+          media_url: publicUrl,
+          media_type: file.type.startsWith('video/') ? 'video' : 'image',
+          cta_text: cta,
+          cta_link: link,
+          payment_ref: response.reference,
+          payment_amount: adFee,
+          status: 'active',
+          expires_at: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString() // 3 weeks
+        };
+
+        const { error: adErr } = await db.from('advertisements').insert([adData]);
+        if (adErr) throw adErr;
+
+        toast('Success', 'Your advertisement is now live!', 'success');
+        document.getElementById('ad-title').value = '';
+        document.getElementById('ad-desc').value = '';
+        document.getElementById('ad-media-file').value = '';
+        document.getElementById('ad-media-preview-container').classList.add('hidden');
+        loadActiveAds();
+      },
+      onClose: function() {
+        toast('Cancelled', 'Payment was cancelled', 'warn');
+        btn.innerHTML = '<i class="fa-solid fa-credit-card"></i> Pay & Publish Ad';
+        btn.disabled = false;
+      }
+    });
+    handler.openIframe();
+  } catch(e) {
+    console.error('Ad payment err:', e);
+    toast('Error', 'Failed to process ad payment', 'error');
+    btn.innerHTML = '<i class="fa-solid fa-credit-card"></i> Pay & Publish Ad';
+    btn.disabled = false;
+  }
+}
+
+async function loadActiveAds() {
+  if (!user) return;
+  const tbody = document.getElementById('ad-table-body');
+  try {
+    const { data: ads, error } = await db.from('advertisements').select('*').eq('advertiser_id', user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+
+    let totalViews = 0, totalClicks = 0;
+    
+    if (!ads || ads.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text3)">No active ads yet</td></tr>';
+    } else {
+      tbody.innerHTML = ads.map(a => {
+        totalViews += a.views || 0;
+        totalClicks += a.clicks || 0;
+        const mediaTag = a.media_type === 'video' 
+          ? `<video src="${a.media_url}" style="width:40px;height:40px;object-fit:cover;border-radius:4px"></video>` 
+          : `<img src="${a.media_url}" style="width:40px;height:40px;object-fit:cover;border-radius:4px">`;
+        const expDate = new Date(a.expires_at).toLocaleDateString();
+        return `<tr>
+          <td>${mediaTag}</td>
+          <td style="font-weight:600">${escHtml(a.title)}</td>
+          <td>${a.views || 0}</td>
+          <td>${a.clicks || 0}</td>
+          <td><span class="badge ${a.status==='active'?'badge-green':a.status==='expired'?'badge-red':'badge-gold'}">${a.status}</span></td>
+          <td>${expDate}</td>
+        </tr>`;
+      }).join('');
+    }
+    
+    document.getElementById('ad-active-count').textContent = ads?.filter(a=>a.status==='active').length || 0;
+    document.getElementById('ad-total-views').textContent = totalViews;
+    document.getElementById('ad-total-clicks').textContent = totalClicks;
+
+  } catch(e) {
+    console.error('Failed to load ads:', e);
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:red">Failed to load ads</td></tr>';
+  }
+}
+
+// Buyer side rotating popup logic
+let activeSystemAds = [];
+let adPopupInterval = null;
+let currentAdIndex = 0;
+let adSkipTimer = 5;
+let adSkipInterval = null;
+
+async function fetchSystemAds() {
+  try {
+    const { data: ads } = await db.from('advertisements')
+      .select('*')
+      .eq('status', 'active')
+      .gt('expires_at', new Date().toISOString())
+      .limit(5); // Show max 5 rotating ads
+      
+    if (ads && ads.length > 0) {
+      activeSystemAds = ads;
+      // Randomize starting point or shuffle
+      activeSystemAds.sort(() => 0.5 - Math.random());
+      
+      // Delay to not immediately annoy user
+      setTimeout(showAdPopup, 10000); // show 10s after load
+    }
+  } catch(e) { console.error('Fetch ads error', e); }
+}
+
+function showAdPopup() {
+  if (activeSystemAds.length === 0 || sessionStorage.getItem('ads_seen_session')) return;
+  
+  const popup = document.getElementById('ad-popup-overlay');
+  popup.classList.remove('hidden');
+  renderCurrentAd();
+}
+
+function renderCurrentAd() {
+  if (activeSystemAds.length === 0) return;
+  const ad = activeSystemAds[currentAdIndex];
+  
+  document.getElementById('ad-counter').textContent = `${currentAdIndex + 1}/${activeSystemAds.length}`;
+  
+  const contentEl = document.getElementById('ad-popup-content');
+  if (ad.media_type === 'video') {
+    contentEl.innerHTML = `<video id="ad-video-el" src="${ad.media_url}" style="width:100%;height:100%;object-fit:cover" autoplay loop muted playsinline></video>
+                           <div class="ad-popup-info" style="pointer-events:none">
+                             <h2>${escHtml(ad.title)}</h2>
+                             <p>${escHtml(ad.description)}</p>
+                           </div>`;
+    // ensure it plays
+    setTimeout(() => {
+      const v = document.getElementById('ad-video-el');
+      if(v) v.play().catch(e=>console.log("Autoplay prevented"));
+    }, 100);
+  } else {
+    contentEl.innerHTML = `<img src="${ad.media_url}" style="width:100%;height:100%;object-fit:cover">
+                           <div class="ad-popup-info" style="pointer-events:none">
+                             <h2>${escHtml(ad.title)}</h2>
+                             <p>${escHtml(ad.description)}</p>
+                           </div>`;
+  }
+  
+  document.getElementById('ad-cta-btn').href = ad.cta_link || '#';
+  document.getElementById('ad-cta-text').textContent = ad.cta_text || 'Learn More';
+  
+  // Register View
+  callEdge('/update-ad-stats', { adId: ad.id, type: 'view' }).catch(e=>console.error(e));
+  
+  // setup dots
+  const dotsContainer = document.getElementById('ad-popup-dots');
+  dotsContainer.innerHTML = activeSystemAds.map((_, i) => `<div class="ad-popup-dot ${i === currentAdIndex ? 'active' : ''}"></div>`).join('');
+  
+  // reset timer
+  adSkipTimer = 5;
+  const skipBtn = document.getElementById('ad-skip-btn');
+  skipBtn.disabled = true;
+  document.getElementById('ad-skip-timer').textContent = adSkipTimer;
+  
+  clearInterval(adSkipInterval);
+  adSkipInterval = setInterval(() => {
+    adSkipTimer--;
+    if (adSkipTimer <= 0) {
+      clearInterval(adSkipInterval);
+      skipBtn.disabled = false;
+      document.getElementById('ad-skip-timer').textContent = '';
+      skipBtn.innerHTML = 'Skip <i class="fa-solid fa-step-forward"></i>';
+    } else {
+      document.getElementById('ad-skip-timer').textContent = adSkipTimer;
+    }
+  }, 1000);
+  
+  // Setup progress animation for 10s total
+  const progress = document.getElementById('ad-progress');
+  progress.style.transition = 'none';
+  progress.style.width = '0%';
+  setTimeout(() => {
+    progress.style.transition = 'width 10s linear';
+    progress.style.width = '100%';
+  }, 50);
+  
+  clearTimeout(adPopupInterval);
+  adPopupInterval = setTimeout(nextAd, 10000);
+  
+  // Track clicks
+  document.getElementById('ad-cta-btn').onclick = () => {
+    callEdge('/update-ad-stats', { adId: ad.id, type: 'click' }).catch(e=>console.error(e));
+  };
+}
+
+function nextAd() {
+  currentAdIndex = (currentAdIndex + 1) % activeSystemAds.length;
+  // If we cycled through all of them, maybe just close it
+  if (currentAdIndex === 0) {
+    closeAdPopup();
+    return;
+  }
+  renderCurrentAd();
+}
+
+function skipAd() {
+  nextAd();
+}
+
+function closeAdPopup() {
+  document.getElementById('ad-popup-overlay').classList.add('hidden');
+  clearTimeout(adPopupInterval);
+  clearInterval(adSkipInterval);
+  sessionStorage.setItem('ads_seen_session', 'true');
+}
+
+// Call fetch on load for buyers
+if (!user || user.user_type === 'buyer') {
+  document.addEventListener('DOMContentLoaded', fetchSystemAds);
+}
+
+
+// ====================================================
+//  SERVICE PROVIDER IMAGE DELETION
+// ====================================================
+async function deletePortfolioImage(url, gigId, event) {
+  event.stopPropagation();
+  if(!confirm("Are you sure you want to delete this image?")) return;
+  const btn = event.currentTarget;
+  const originalHtml = btn.innerHTML;
+  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+  
+  try {
+    const { data: gigData, error: fetchErr } = await db.from('service_gigs').select('*').eq('id', gigId).single();
+    if (fetchErr) throw fetchErr;
+    if (!gigData) return;
+    
+    let urls = gigData.portfolio_urls || [];
+    urls = urls.filter(u => u !== url); // remove the specific url
+    
+    // Update db
+    const { error: updateErr } = await db.from('service_gigs').update({ portfolio_urls: urls }).eq('id', gigId);
+    if(updateErr) throw updateErr;
+    
+    toast('Deleted', 'Image removed from portfolio', 'success');
+    
+    // Rerender UI
+    loadMyGigs();
+
+  } catch(e) {
+    console.error('Delete image err:', e);
+    toast('Error', 'Failed to delete image', 'error');
+    btn.innerHTML = originalHtml;
+  }
+}
+
+
+// ====================================================
+//  AFFILIATE SYSTEMS
+// ====================================================
+async function generateAndLoadAffiliateData() {
+  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) return;
+  
+  const linkInput = document.getElementById('referral-link');
+  linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${user.id}`;
+  
+  try {
+    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', user.id).order('created_at', { ascending: false });
+    if(error) throw error;
+    
+    const total = earnings?.filter(e=>e.status==='paid').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
+    const pending = earnings?.filter(e=>e.status==='pending').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
+    
+    document.getElementById('aff-total').textContent = `₦${total.toLocaleString()}`;
+    document.getElementById('aff-pending').textContent = `₦${pending.toLocaleString()}`;
+    // Clicks/conversions would normally come from a referrals/clicks table. Assuming conversion = total referrals made
+    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', user.id);
+    document.getElementById('aff-conversions').textContent = refCount || 0;
+    
+    const tbody = document.getElementById('aff-table-body');
+    if(!earnings || earnings.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)">No earnings yet</td></tr>';
+    } else {
+      tbody.innerHTML = earnings.map(e => `
+        <tr>
+          <td>${new Date(e.created_at).toLocaleDateString()}</td>
+          <td>${e.product_name || 'Referral Subscription'}</td>
+          <td>${e.source || 'referral_link'}</td>
+          <td style="font-weight:600;color:var(--green)">₦${e.earning_amount}</td>
+          <td><span class="badge ${e.status==='paid'?'badge-green':e.status==='cancelled'?'badge-red':'badge-gold'}">${e.status}</span></td>
+        </tr>
+      `).join('');
+    }
+  } catch(e) {
+    console.error('Affiliate load error', e);
+  }
+}
+
+function copyReferralLink() {
+  const linkInput = document.getElementById('referral-link');
+  if(!linkInput || !linkInput.value) return;
+  navigator.clipboard.writeText(linkInput.value).then(()=>{
+    toast('Copied', 'Referral link copied to clipboard', 'success');
+  }).catch(()=>{
+    linkInput.select();
+    document.execCommand('copy');
+    toast('Copied', 'Referral link copied to clipboard', 'success');
+  });
+}
+
+// Intercept showDash to trigger loads
+const _origShowDash = showDash;
+showDash = function(section) {
+  _origShowDash(section);
+  if (section === 'advertise') loadActiveAds();
+  if (section === 'affiliate') generateAndLoadAffiliateData();
+}
+
+// Track referrals in DB on signup
+// Need to add referral ref processing in app.js
+window.addEventListener('DOMContentLoaded', () => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const ref = urlParams.get('ref');
+  if (ref && !sessionStorage.getItem('referred_by')) {
+    sessionStorage.setItem('referred_by', ref);
+  }
+});
