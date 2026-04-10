@@ -33,7 +33,7 @@ async function callGroq(messages, systemPrompt = null) {
   groqMessages.push(...deduped);
 
   if (groqMessages.filter(m => m.role !== 'system').length === 0) {
-    throw new Error("No valid messages to send.");
+    throw new Error('No valid messages to send.');
   }
 
   const response = await fetch(GROQ_URL, {
@@ -55,6 +55,10 @@ async function callGroq(messages, systemPrompt = null) {
   return data.choices[0].message.content;
 }
 
+let chatHistory = []; 
+let adminAiHistory = [];
+
+const CLAUDE_EDGE_URL = `${EDGE_URL}/smooth-handler`;
 let chatHistory = []; 
 let adminAiHistory = [];
 
@@ -150,14 +154,17 @@ function toggleAuth(mode) {
   const isSignup = mode === 'signup';
   const isForgot = mode === 'forgot';
 
+  // Tab highlights
   document.getElementById('auth-tab-login').classList.toggle('active',  isLogin);
   document.getElementById('auth-tab-signup').classList.toggle('active', isSignup);
 
+  // Show/hide panels
   document.getElementById('auth-form').classList.toggle('hidden',          isForgot);
   document.getElementById('auth-forgot-panel').classList.toggle('hidden',  !isForgot);
   document.getElementById('forgot-link-row').classList.toggle('hidden',    !isLogin || isForgot);
 
   if (isForgot) {
+    // Reset forgot panel to step 1
     document.getElementById('forgot-step-1').classList.remove('hidden');
     document.getElementById('forgot-step-2').classList.add('hidden');
     document.getElementById('forgot-email').value = '';
@@ -174,10 +181,12 @@ function toggleAuth(mode) {
   if (isSignup) selectRole('buyer');
 }
 
+// Role card selector
 function selectRole(role) {
   document.querySelectorAll('.role-card').forEach(c => c.classList.remove('active'));
   document.getElementById('role-card-' + role)?.classList.add('active');
   document.querySelector(`input[name="auth-role-radio"][value="${role}"]`).checked = true;
+  // Show/hide WhatsApp for seller/both/service_provider
   const needsWa = role === 'seller' || role === 'both' || role === 'service_provider';
   document.getElementById('auth-wa-group').classList.toggle('hidden', !needsWa);
   document.getElementById('role-both-note').classList.toggle('hidden', role !== 'both');
@@ -199,9 +208,11 @@ async function handleAuth(e) {
 
   try {
     if (isLogin) {
+      // ── SIGN IN ──────────────────────────────────────────────
       const { data, error } = await db.auth.signInWithPassword({ email, password });
 
       if (error) {
+        // Give a clear, actionable message for every common error
         const msg = error.message?.toLowerCase() || '';
         if (msg.includes('email not confirmed')) {
           toast('Email Not Confirmed',
@@ -217,11 +228,13 @@ async function handleAuth(e) {
         return;
       }
 
+      // Use session.user (more reliable than data.user after token refresh)
       const user = data.session?.user || data.user;
       await onAuthSuccess(user);
       closeModal('auth-modal');
 
     } else {
+      // ── SIGN UP ──────────────────────────────────────────────
       const name    = validateInput(document.getElementById('auth-name').value.trim());
       const rawRole = validateInput(document.querySelector('input[name="auth-role-radio"]:checked')?.value || 'buyer');
       const wa      = document.getElementById('auth-wa').value.trim();
@@ -236,6 +249,7 @@ async function handleAuth(e) {
       const role     = rawRole === 'both' ? 'seller' : rawRole;
       const accounts = rawRole;
 
+      // Step 1: Create the account
       const { data: signUpData, error: signUpError } = await db.auth.signUp({
         email, password,
         options: { data: { name, role, accounts, whatsapp: wa } }
@@ -244,6 +258,7 @@ async function handleAuth(e) {
       if (signUpError) {
         const msg = signUpError.message?.toLowerCase() || '';
         if (msg.includes('already registered') || msg.includes('already exists') || msg.includes('user already')) {
+          // Account exists — just sign them in directly
           toast('Account exists — signing you in…', '', 'info', 3000);
           const { data: loginData, error: loginError } = await db.auth.signInWithPassword({ email, password });
           if (loginError) {
@@ -262,9 +277,12 @@ async function handleAuth(e) {
         return;
       }
 
+      // Step 2: Always immediately sign in after signup — guarantees a live session
+      // regardless of whether email confirmation setting is truly off
       const { data: loginData, error: loginError } = await db.auth.signInWithPassword({ email, password });
 
       if (loginError) {
+        // Signup worked but auto-login failed — tell them to sign in manually
         toast('Account Created!', 'Now sign in with your email and password', 'success', 6000);
         toggleAuth('login');
         document.getElementById('auth-email').value = email;
@@ -317,9 +335,11 @@ async function onAuthSuccess(user) {
   if (!user) return;
   currentUser = user;
 
+  // Load profile from DB
   const { data: profile, error } = await db.from('profiles').select('*').eq('id', user.id).single();
 
   if (error || !profile) {
+    // Profile not yet created (trigger may still be running) — create it now
     await upsertProfile(user, user.user_metadata || {});
     const { data: retryProfile } = await db.from('profiles').select('*').eq('id', user.id).single();
     currentUser.profile = retryProfile || {
@@ -336,10 +356,12 @@ async function onAuthSuccess(user) {
 }
 
 async function checkSession() {
+  // Subscribe to auth state changes FIRST so we don't miss the initial event
   db.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_IN' && session?.user) {
       if (!currentUser) {
         await onAuthSuccess(session.user);
+        // Auto-enter site if still on landing page
         if (document.getElementById('landing') &&
             document.getElementById('landing').style.display !== 'none') {
           enterSite(currentUser?.profile?.role || 'buyer');
@@ -358,6 +380,7 @@ async function checkSession() {
     }
   });
 
+  // Then check for an existing persisted session
   const { data: { session } } = await db.auth.getSession();
   if (session?.user) {
     await onAuthSuccess(session.user);
@@ -373,11 +396,14 @@ function updateNavForUser() {
   document.getElementById('nav-avatar-inner').style.fontSize = '.9rem';
   document.getElementById('dash-user-name').textContent = currentUser.profile?.name || 'Seller';
   document.getElementById('dash-user-email').textContent = currentUser.email || '';
+  // Admin check
+  // DB-backed admin check — email alone is not sufficient
   const isAdmin = currentUser.email === ADMIN_EMAIL &&
                   currentUser.profile?.role === 'admin';
   if (isAdmin) {
     document.getElementById('admin-nav-item')?.classList.remove('hidden');
   }
+  // Referral link
   const rc = currentUser.profile?.referral_code || 'ref_' + currentUser.id?.substr(0,8);
   document.getElementById('referral-link').value = `https://buysell.ng/ref/${rc}`;
 }
@@ -406,6 +432,7 @@ async function sendPasswordReset() {
       return;
     }
 
+    // Show success step
     document.getElementById('forgot-step-1').classList.add('hidden');
     document.getElementById('forgot-step-2').classList.remove('hidden');
     document.getElementById('forgot-sent-to').textContent = 'Reset link sent to ' + email;
@@ -430,9 +457,6 @@ async function logoutUser() {
 }
 
 
-// ====================================================
-//  AI — GENERATE PRODUCT DESCRIPTION (uses Groq directly)
-// ====================================================
 async function generateDescription() {
   const name      = document.getElementById('p-name').value.trim();
   const price     = document.getElementById('p-price').value;
@@ -446,24 +470,32 @@ async function generateDescription() {
   btn.innerHTML = '<span class="spinner-dark"></span> Writing...';
 
   try {
-    const reply = await callGroq([{
-      role: 'user',
-      content: `Write a compelling product description for a Nigerian marketplace listing.
-                Product: ${name}
-                Category: ${category}
-                Condition: ${condition}
-                Price: ₦${price}
-                
-                Requirements:
-                - 2–3 sentences max
-                - Highlight key benefits
-                - Mention it's available in Nigeria
-                - No bullet points, plain text only
-                - Sound authentic and trustworthy`
-    }]);
+    const res  = await fetch(CLAUDE_EDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{
+          role: 'user',
+          content: `Write a compelling product description for a Nigerian marketplace listing.
+                    Product: ${name}
+                    Category: ${category}
+                    Condition: ${condition}
+                    Price: ₦${price}
+                    
+                    Requirements:
+                    - 2–3 sentences max
+                    - Highlight key benefits
+                    - Mention it's available in Nigeria
+                    - No bullet points, plain text only
+                    - Sound authentic and trustworthy`
+        }],
+        context: { task: 'product_description' }
+      }),
+    });
 
-    if (reply) {
-      document.getElementById('p-desc').value = reply;
+    const data = await res.json();
+    if (data.reply) {
+      document.getElementById('p-desc').value = data.reply;
       toast('Description Generated! ✨', 'Edit it to your liking', 'success');
     }
   } catch(e) {
@@ -473,6 +505,7 @@ async function generateDescription() {
     btn.innerHTML = '<i class="fa-solid fa-magic"></i> Generate with AI';
   }
 }
+
 
 
 function showProfile() { if (!currentUser) { showModal('auth-modal'); } else { toast(currentUser.profile?.name || 'You', currentUser.email, 'info'); } }
@@ -523,7 +556,7 @@ function showBuyerView() {
 
 function showSellerDashboard() {
   if (!currentUser) { showModal('auth-modal'); toggleAuth('login'); return; }
-  if (!checkAndPromptKyc()) return;
+  if (!checkAndPromptKyc()) return; // Block unverified access
   document.getElementById('buyer-view').style.display = 'none';
   document.getElementById('seller-dashboard').style.display = 'block';
   document.getElementById('storefront-view').style.display = 'none';
@@ -533,6 +566,7 @@ function showSellerDashboard() {
   document.getElementById('toggle-view-icon').className = 'fa-solid fa-store';
   document.getElementById('toggle-view-text').textContent = 'Back to Shopping';
   document.getElementById('mob-ham-btn').style.display = 'flex';
+  // Show/hide admin nav item
   const adminNavItem = document.getElementById('admin-nav-item');
   if (adminNavItem) adminNavItem.style.display = currentUser?.email === ADMIN_EMAIL ? 'flex' : 'none';
   document.body.classList.add('in-seller');
@@ -551,7 +585,7 @@ function toggleView() {
   if (currentRole === 'seller') showBuyerView();
   else { 
     if (!currentUser) { showModal('auth-modal'); return; }
-    if (!checkAndPromptKyc()) return;
+    if (!checkAndPromptKyc()) return; // Block unverified access
     showSellerDashboard(); 
   }
 }
@@ -612,6 +646,7 @@ function updateCarousel() {
 function startCarousel() {
   stopCarousel();
   carouselTimer = setInterval(() => slideCarousel(1), 5000);
+  // Touch swipe
   const el = document.getElementById('hero-carousel');
   if (el) {
     el.addEventListener('touchstart', e => { carouselStartX = e.touches[0].clientX; }, { passive: true });
@@ -694,31 +729,35 @@ function filterCat(cat) {
 }
 
 let searchTimeout;
-
-// ====================================================
-//  AI — SMART SEARCH (uses Groq directly)
-// ====================================================
+// Replace doSearch() with this Claude-enhanced version
 async function doSearch() {
   const q = validateInput(document.getElementById('search-input').value.trim());
   if (!q) return;
 
-  // Fast local fuzzy search first
+  // First do the normal fuzzy search (fast, free)
   activeFilters.search = q.toLowerCase();
   applyCurrentFilters();
 
-  // If few results, ask Groq for suggestions
+  // If < 3 results, ask Claude for query suggestions
   if (filteredProducts.length < 3 && q.length > 4) {
     try {
-      const reply = await callGroq([{
-        role: 'user',
-        content: `A user searched "${q}" on a Nigerian marketplace. 
-                  Suggest 2-3 alternative single-word search terms 
-                  they might mean. Reply ONLY with the terms 
-                  comma-separated, nothing else.`
-      }]);
-
-      if (reply) {
-        const suggestions = reply.split(',').map(s => s.trim()).filter(Boolean);
+      const res  = await fetch(CLAUDE_EDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `A user searched "${q}" on a Nigerian marketplace. 
+                      Suggest 2-3 alternative single-word search terms 
+                      they might mean. Reply ONLY with the terms 
+                      comma-separated, nothing else.`
+          }],
+          context: { task: 'search_suggestion' }
+        }),
+      });
+      const data = await res.json();
+      if (data.reply) {
+        const suggestions = data.reply.split(',').map(s => s.trim()).filter(Boolean);
         if (suggestions.length) {
           toast(
             `💡 Try searching: ${suggestions.slice(0,2).join(', ')}`,
@@ -779,17 +818,20 @@ function clearFilters() {
 function applyCurrentFilters() {
   let result = [...products];
 
+  // 1. SMART FUZZY SEARCH
   if (activeFilters.search) {
     const options = {
       keys: ['name', 'description', 'category', 'location'],
-      threshold: 0.3,
+      threshold: 0.3, // 0.0 = perfect match, 1.0 = match anything
       distance: 100
     };
+    
     const fuse = new Fuse(result, options);
     const searchResult = fuse.search(activeFilters.search);
     result = searchResult.map(res => res.item);
   }
 
+  // 2. CATEGORY FILTER
   if (activeFilters.category && activeFilters.category !== 'all') {
     if (activeFilters.category === 'trending') {
        result = result.filter(p => p.review_count > 0 || p.avg_rating >= 4);
@@ -798,6 +840,7 @@ function applyCurrentFilters() {
     }
   }
 
+  // 3. RANGE FILTERS
   if (activeFilters.priceMin) result = result.filter(p => p.price >= activeFilters.priceMin);
   if (activeFilters.priceMax) result = result.filter(p => p.price <= activeFilters.priceMax);
   if (activeFilters.minRating) result = result.filter(p => (p.avg_rating || 5) >= activeFilters.minRating);
@@ -829,12 +872,14 @@ async function openProduct(id) {
   if (!currentProd) return;
   const p = currentProd;
   showModal('product-modal');
+  // Gallery
   const main = document.getElementById('gallery-main');
   if (p.has_video && p.video_url) {
     main.innerHTML = `<video src="${p.video_url}" controls playsinline style="width:100%;height:100%;object-fit:contain;border-radius:var(--radius-sm)" poster="${p.image_url||''}"></video>`;
   } else {
     main.innerHTML = `<img src="${p.image_url||'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=600'}" alt="${escHtml(p.name)}" loading="lazy" style="width:100%;height:100%;object-fit:contain">`;
   }
+  // Info
   document.getElementById('modal-prod-name').textContent = p.name;
   document.getElementById('modal-price').textContent = fmtN(p.price);
   document.getElementById('modal-desc').textContent = p.description || '';
@@ -853,14 +898,17 @@ async function openProduct(id) {
   sb.className = `badge ${stock===0?'badge-red':stock<=5?'badge-gold':'badge-green'}`;
   document.getElementById('modal-cart-btn').disabled = stock === 0;
   document.getElementById('modal-negotiable-note').classList.toggle('hidden', !p.negotiable);
+  // Seller
   const seller = p.profiles || {};
   document.getElementById('modal-seller-name').textContent = seller.name || 'Seller';
   document.getElementById('modal-seller-email').textContent = `WhatsApp: ${seller.whatsapp||'N/A'}`;
   document.getElementById('modal-seller-avatar').textContent = (seller.name||'S')[0].toUpperCase();
+  // Flags
   const flags = [];
   if (p.has_video) flags.push('<span class="prod-badge prod-badge-video">🎬 Video</span>');
   if (p.seller_verified) flags.push('<span class="prod-badge prod-badge-verified">✓ Verified</span>');
   document.getElementById('modal-flags').innerHTML = flags.join('');
+  // Reviews
   loadProductReviews(id);
 }
 
@@ -871,10 +919,12 @@ async function loadProductReviews(productId) {
   document.getElementById('modal-review-count').textContent = `${count} review${count!==1?'s':''}`;
   document.getElementById('modal-verified-count').textContent = count;
 
+  // Calculate average and star distribution
   const avg = count ? (reviews.reduce((s,r)=>s+r.rating,0)/count) : 0;
   document.getElementById('modal-avg-rating').textContent = avg.toFixed(1);
   document.getElementById('modal-stars').textContent = '★'.repeat(Math.round(avg)) + '☆'.repeat(5-Math.round(avg));
 
+  // Star distribution bars (5→1)
   const barsEl = document.getElementById('modal-rating-bars');
   barsEl.innerHTML = [5,4,3,2,1].map(star => {
     const starCount = reviews.filter(r => r.rating === star).length;
@@ -888,6 +938,7 @@ async function loadProductReviews(productId) {
     </div>`;
   }).join('');
 
+  // Review list
   const list = document.getElementById('modal-reviews-list');
   if (!count) { list.innerHTML = '<p class="color-text3 text-sm" style="padding:.5rem 0">No reviews yet. Be the first to share your experience!</p>'; return; }
   list.innerHTML = reviews.map(r => `
@@ -907,6 +958,8 @@ async function loadProductReviews(productId) {
 // ====================================================
 //  STOREFRONT
 // ====================================================
+
+
 function goBackFromStorefront() {
   document.getElementById('storefront-view').style.display = 'none';
   document.getElementById('buyer-view').style.display = 'block';
@@ -1000,6 +1053,7 @@ function startCheckout() {
   if (!cart.length) { toast('Cart is empty','','warn'); return; }
   goCheckoutStep(1);
   showModal('checkout-modal');
+  // Pre-fill
   const p = currentUser.profile || {};
   if (p.name) document.getElementById('co-name').value = p.name;
   document.getElementById('co-pay-email').textContent = currentUser.email;
@@ -1008,12 +1062,14 @@ function startCheckout() {
   document.getElementById('co-pay-amount').textContent = fmtN(total);
   document.getElementById('co-commission').textContent = fmtN(comm);
   document.getElementById('co-total').textContent = fmtN(total);
+  // Order items
   document.getElementById('co-items').innerHTML = cart.map(c=>`
     <div class="order-item">
       <img src="${c.image_url||'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=100'}" alt="" loading="lazy">
       <div style="flex:1;min-width:0"><div class="font-600 text-sm" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px">${escHtml(c.name)}</div><div class="color-text3 text-xs">Qty: ${c.qty||1}</div></div>
       <div class="font-bold text-sm">${fmtN(c.price*(c.qty||1))}</div>
     </div>`).join('');
+  // Bank transfer details from first seller
   const seller = cart[0]?.profiles || {};
   document.getElementById('seller-bank-details-co').innerHTML = `
     <div class="pay-row"><span class="label">Bank</span><span class="value">${escHtml(seller.bank_name||'Seller Bank')}</span></div>
@@ -1053,7 +1109,10 @@ function payWithPaystack() {
     email: currentUser.email,
     amount: total * 100, 
     callback: async function(response) {
+      // 1. Show a loader
       toast('Verifying Payment...', 'Please do not close the window', 'info');
+
+      // 2. Call your Edge Function instead of local saveOrderToDb
       try {
         const verification = await fetch(`${EDGE_URL}/verify-payment`, {
           method: 'POST',
@@ -1064,9 +1123,11 @@ function payWithPaystack() {
               buyer_id: currentUser.id,
               items: cart,
               delivery_address: document.getElementById('co-address').value,
+              // ... other fields
             }
           })
         });
+
         const result = await verification.json();
         if (result.success) {
           cart = []; saveCart();
@@ -1094,7 +1155,7 @@ async function submitTransferOrder() {
   if (!fileInput.files?.[0]) { toast('Please upload payment proof','','warn'); return; }
   const proofFile = fileInput.files[0];
   const ALLOWED_PROOF = ['image/jpeg','image/png','image/webp','image/heic','image/heif'];
-  const MAX_PROOF_SIZE = 10 * 1024 * 1024;
+  const MAX_PROOF_SIZE = 10 * 1024 * 1024; // 10MB
   if (!ALLOWED_PROOF.includes(proofFile.type)) { toast('Invalid file','Please upload a JPG or PNG screenshot','warn'); return; }
   if (proofFile.size > MAX_PROOF_SIZE)         { toast('File too large','Maximum proof image size is 10MB','warn'); return; }
   const btn = document.getElementById('co-transfer-btn');
@@ -1108,6 +1169,7 @@ async function submitTransferOrder() {
     if (!upErr) { const { data } = db.storage.from('uploads').getPublicUrl(path); proofUrl = data.publicUrl; }
     await saveOrderToDb(null, 'transfer', null, proofUrl);
 
+    // Also save to payment_receipts for seller auditing
     if (proofUrl && cart.length > 0) {
       const sellerId = cart[0]?.seller_id || cart[0]?.profiles?.id;
       const total = cart.reduce((sum, c) => sum + (c.price * (c.qty || 1)), 0);
@@ -1118,11 +1180,13 @@ async function submitTransferOrder() {
         amount:       total,
         payment_type: 'product',
         status:       'pending'
-      }).then(() => {}).catch(() => {});
+      }).then(() => {}).catch(() => {}); // non-blocking
     }
   } catch(e) { toast('Error','Could not submit order','error'); }
   btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Submit Order';
 }
+
+
 
 // ====================================================
 //  REVIEWS
@@ -1221,13 +1285,16 @@ async function loadSellerStats() {
   document.getElementById('st-revenue').textContent = fmtN(revenue);
   document.getElementById('st-orders').textContent = (orders||[]).length;
   document.getElementById('st-rating').textContent = avgR;
+  // Trial
   const profile = currentUser.profile || {};
   const trialEnd = profile.trial_end ? new Date(profile.trial_end) : new Date(Date.now()+30*86400000);
   const daysLeft = Math.max(0, Math.ceil((trialEnd - new Date()) / 86400000));
   document.getElementById('st-trial').textContent = daysLeft > 0 ? `${daysLeft}d left` : 'Expired';
   document.getElementById('st-days').textContent = daysLeft > 0 ? 'Free Trial' : 'Pay Commission';
+  // Withdrawal data
   document.getElementById('wd-available').textContent = fmtN(Math.max(0, revenue * 0.92));
   document.getElementById('wd-total').textContent = fmtN(0);
+  // Orders badge
   const pending = (orders||[]).filter(o=>o.status==='pending').length;
   const badge = document.getElementById('orders-badge');
   badge.textContent = pending; badge.classList.toggle('hidden', !pending);
@@ -1243,6 +1310,7 @@ async function renderChart() {
     .gte('created_at', since.toISOString())
     .neq('status','cancelled');
 
+  // Group by day
   const dayMap = {};
   for (let i = days-1; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate()-i);
@@ -1312,6 +1380,7 @@ async function submitProduct(e) {
   document.getElementById('pub-btn-text').textContent = '';
   document.getElementById('pub-spinner').classList.remove('hidden');
   try {
+    // ── Input validation ──────────────────────────────────────
     const nameVal  = document.getElementById('p-name').value.trim();
     const priceVal = parseFloat(document.getElementById('p-price').value);
     const stockVal = parseInt(document.getElementById('p-stock').value) || 0;
@@ -1332,10 +1401,11 @@ async function submitProduct(e) {
     if (!VALID_CATS.includes(catVal))            { toast('Invalid category','Please select a valid category','warn'); return; }
     if (!VALID_CONDS.includes(condVal))          { toast('Invalid condition','Please select a valid condition','warn'); return; }
 
+    // ── File upload security ───────────────────────────────────
     const ALLOWED_IMG_TYPES = ['image/jpeg','image/png','image/webp','image/gif'];
     const ALLOWED_VID_TYPES = ['video/mp4','video/webm','video/ogg','video/quicktime'];
-    const MAX_IMG_SIZE = 5 * 1024 * 1024;
-    const MAX_VID_SIZE = 50 * 1024 * 1024;
+    const MAX_IMG_SIZE = 5 * 1024 * 1024;   // 5MB
+    const MAX_VID_SIZE = 50 * 1024 * 1024;  // 50MB
 
     const imgFile = document.getElementById('p-image').files[0];
     const vidFile = document.getElementById('p-video').files[0];
@@ -1378,6 +1448,7 @@ async function submitProduct(e) {
     if (vidUrl) prodData.video_url = vidUrl;
 
     if (editingProductId) {
+      // UPDATE mode
       await callEdge('manage-product', {
         action: 'update',
         product_id: editingProductId,
@@ -1390,6 +1461,7 @@ async function submitProduct(e) {
       document.querySelector('#ds-add-product .dash-page-title').textContent = 'Add New Product';
       document.querySelector('#ds-add-product .dash-page-sub').textContent = 'Products with videos get 3× more sales! 🎬';
     } else {
+      // INSERT mode — server-side via Edge Function
       await callEdge('manage-product', {
         action: 'create',
         data: { ...prodData, image_url: imgUrl, video_url: vidUrl }
@@ -1419,6 +1491,7 @@ async function toggleProductStatus(id, current) {
   loadSellerProds();
 }
 
+// editing state
 let editingProductId = null;
 
 async function editProduct(id) {
@@ -1426,6 +1499,7 @@ async function editProduct(id) {
   if (error || !p) { toast('Could not load product', '', 'error'); return; }
   editingProductId = id;
   showDash('add-product');
+  // Pre-fill form
   document.getElementById('p-name').value = p.name || '';
   document.getElementById('p-price').value = p.price || '';
   document.getElementById('p-orig-price').value = p.original_price || '';
@@ -1436,9 +1510,11 @@ async function editProduct(id) {
   document.getElementById('p-desc').value = p.description || '';
   document.getElementById('p-location').value = p.location || '';
   document.getElementById('p-negotiable').checked = !!p.negotiable;
+  // Update button and heading
   document.getElementById('pub-btn-text').textContent = 'Update Product';
   document.querySelector('#ds-add-product .dash-page-title').textContent = 'Edit Product';
   document.querySelector('#ds-add-product .dash-page-sub').textContent = 'Update your product details below';
+  // Show cancel button
   let cancelBtn = document.getElementById('edit-cancel-btn');
   if (!cancelBtn) {
     cancelBtn = document.createElement('button');
@@ -1552,6 +1628,7 @@ async function checkSellerCommission() {
   if (commPaid) { badge.className='badge badge-green'; badge.textContent='✓ Active'; }
   else if (trialEnd && trialEnd > new Date()) { badge.className='badge badge-gold'; badge.textContent=`Trial – ${Math.ceil((trialEnd-new Date())/86400000)}d left`; }
   else { badge.className='badge badge-red'; badge.textContent='Suspended'; }
+  // Show suspended modal if needed
   if (!commPaid && trialEnd && trialEnd < new Date() && currentUser.email !== ADMIN_EMAIL) {
     document.getElementById('suspended-modal').classList.add('open');
   }
@@ -1567,6 +1644,7 @@ function payCommissionPaystack() {
     currency: 'NGN',
     ref: 'comm_' + Date.now(),
     callback: async (response) => {
+      // Commission confirmed via Paystack — direct update for immediate UI response
       await callEdge('admin-action', { action: 'toggle_commission', target_id: currentUser.id, data: { commission_paid: true } }).catch(() => db.from('profiles').update({ commission_paid: true }).eq('id', currentUser.id));
       currentUser.profile.commission_paid = true;
       document.getElementById('suspended-modal').classList.remove('open');
@@ -1587,6 +1665,8 @@ async function submitCommissionReceipt() {
 
   try {
     toast('Uploading receipt...', '', 'info', 3000);
+
+    // 1. Upload receipt image to Supabase Storage
     const ext  = file.name.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '');
     const path = `receipts/${currentUser.id}/${Date.now()}.${ext}`;
     const { data: uploadData, error: uploadErr } = await db.storage
@@ -1598,6 +1678,7 @@ async function submitCommissionReceipt() {
     const { data: urlData } = db.storage.from('uploads').getPublicUrl(uploadData.path);
     const receiptUrl = urlData?.publicUrl || '';
 
+    // 2. Insert record into commission_receipts table
     const { error: insertErr } = await db.from('commission_receipts').insert({
       seller_id:       currentUser.id,
       receipt_url:     receiptUrl,
@@ -1612,6 +1693,8 @@ async function submitCommissionReceipt() {
     closeModal('commission-modal');
     document.getElementById('suspended-modal').classList.remove('open');
     document.body.classList.remove('modal-open');
+    
+    // Clear form
     document.getElementById('commission-file').value = '';
     document.getElementById('commission-ref').value = '';
   } catch(e) {
@@ -1633,6 +1716,7 @@ async function loadSettings() {
   document.getElementById('s-account-name').value = p.account_name||'';
   document.getElementById('s-paystack-key').value = p.paystack_key||'';
   document.getElementById('s-notif-email').value = p.notif_email||p.email||'';
+  // Withdrawal panel
   document.getElementById('wd-bank-name').textContent = p.bank_name||'Not set';
   document.getElementById('wd-acct-num').textContent = p.account_number||'—';
   document.getElementById('wd-acct-name').textContent = p.account_name||'—';
@@ -1729,6 +1813,7 @@ async function loadAffiliateData() {
   if (!currentUser) return;
   const rc = currentUser.profile?.referral_code || 'ref_' + currentUser.id?.substr(0,8);
   document.getElementById('referral-link').value = `https://buysell.ng/ref/${rc}`;
+  // Load referral earnings from DB
   const { data: refs } = await db.from('referrals').select('*').eq('referrer_id', currentUser.id);
   const earned = (refs||[]).filter(r=>r.paid).reduce((s,r)=>s+(r.amount||500),0);
   const pending = (refs||[]).filter(r=>!r.paid).reduce((s,r)=>s+(r.amount||500),0);
@@ -1736,6 +1821,7 @@ async function loadAffiliateData() {
   document.getElementById('aff-pending').textContent = fmtN(pending);
   document.getElementById('aff-clicks').textContent = (refs||[]).length * 3 + Math.floor(Math.random()*5);
   document.getElementById('aff-conversions').textContent = (refs||[]).length;
+  // Earnings table
   const tbody = document.getElementById('aff-table-body');
   if (!refs?.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)">No earnings yet. Share your referral link!</td></tr>'; return; }
   tbody.innerHTML = refs.map(r=>`<tr><td>${fmtDate(r.created_at)}</td><td>Referral Signup</td><td>Direct Link</td><td class="font-bold color-green">${fmtN(r.amount||500)}</td><td><span class="badge ${r.paid?'badge-green':'badge-gold'}">${r.paid?'Paid':'Pending'}</span></td></tr>`).join('');
@@ -1781,12 +1867,13 @@ async function submitDispute() {
 }
 
 // ====================================================
-//  SUPER ADMIN
+//  SUPER ADMIN — full gated panel
 // ====================================================
 let _adminSellersCache = [];
 let _adminRevenueChart = null;
 
 function isAdmin() {
+  // Both email AND database role must match — prevents email spoofing
   return currentUser?.email === ADMIN_EMAIL &&
          currentUser?.profile?.role === 'admin';
 }
@@ -1832,14 +1919,24 @@ async function saveAdminLogo() {
   btn.innerHTML = '<span class="spinner"></span> Saving...';
 
   try {
+    // 1. Upload to Supabase (using your existing 'uploads' bucket)
     const ext = tempLogoFile.name.split('.').pop();
     const path = `branding/logo_${Date.now()}.${ext}`;
+    
     const { error: upErr, data } = await db.storage.from('uploads').upload(path, tempLogoFile, { upsert: true });
     if (upErr) throw upErr;
+    
+    // 2. Get Public URL
     const { data: pubData } = db.storage.from('uploads').getPublicUrl(path);
     const logoUrl = pubData.publicUrl;
+
+    // 3. Save to localStorage so it persists instantly for all page reloads
+    // (In a full scale app, you'd also save this to a 'site_settings' table in Supabase)
     localStorage.setItem('buysell_custom_logo', logoUrl);
+    
+    // 4. Apply globally to the DOM right now
     applySiteLogo(logoUrl);
+    
     toast('Logo Updated! 🎨', 'Your new branding is live', 'success');
   } catch(e) {
     console.error("Logo upload error:", e);
@@ -1850,20 +1947,28 @@ async function saveAdminLogo() {
   }
 }
 
+// Function to hunt down every logo element and replace it with the image
 function applySiteLogo(url) {
   if (!url) return;
   document.querySelectorAll('.brand-icon').forEach(icon => {
+    // Replace the text "B" with the uploaded image
     icon.innerHTML = `<img src="${sanitizeUrl(url)}" alt="Logo" style="width:100%;height:100%;object-fit:contain;border-radius:inherit;">`;
+    // Remove the green background gradient so the image looks clean
     icon.style.background = 'transparent';
     icon.style.boxShadow = 'none';
   });
 }
    
 function switchAdminTab(tab) {
+  // Hide all tab panels
   document.querySelectorAll('.adm-tab').forEach(p => p.classList.add('hidden'));
+  // Deactivate all sidebar nav items
   document.querySelectorAll('#admin-portal-view .dash-nav-item').forEach(b => b.classList.remove('active'));
+  // Show selected panel
   document.getElementById('adm-tab-' + tab)?.classList.remove('hidden');
+  // Highlight sidebar item
   document.getElementById('ap-nav-' + tab)?.classList.add('active');
+  // Load data
   if (tab === 'overview')     loadAdminOverview();
   if (tab === 'sellers')      loadAdminSellers();
   if (tab === 'orders')       loadAdminOrders();
@@ -1874,6 +1979,7 @@ function switchAdminTab(tab) {
   if (tab === 'ai')           adminAiHistory = [];
 }
 
+/* ── OVERVIEW ── */
 async function loadAdminOverview() {
   if (!guardAdminPanel()) return;
   const [{ data: sellers }, { data: buyers }, { data: orders }] = await Promise.all([
@@ -1895,13 +2001,15 @@ async function loadAdminOverview() {
   document.getElementById('adm-trial').textContent         = trial;
   document.getElementById('adm-suspended').textContent     = suspended;
 
+  // Disputes count
   const { count } = await db.from('disputes').select('id', { count:'exact', head:true }).eq('status','open');
   document.getElementById('adm-disputes').textContent = count || 0;
 
+  // Revenue bar chart
   _renderAdminRevenueChart(orders || []);
 }
 
-// ====================================================
+   // ====================================================
 //  ADMIN AI ASSISTANT (uses Groq directly)
 // ====================================================
 async function askAdminBot(preset) {
@@ -1921,26 +2029,125 @@ async function askAdminBot(preset) {
   const typingDiv = document.createElement('div');
   typingDiv.id = 'admin-typing';
   typingDiv.style.cssText = 'display:flex;gap:.42rem;align-items:center';
-  typingDiv.innerHTML = `<div style="background:var(--green-xlt);color:var(--green);font-size:.76rem;flex-shrink:0;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-robot"></i></div><div style="background:#fff;border:1px solid var(--border);padding:.52rem .82rem;border-radius:14px;font-size:.79rem;color:var(--text3)">Thinking…</div>`;
+  typingDiv.innerHTML = `<div style="background:var(--green-xlt);color:var(--green);font-size:.76rem;flex-shrink:0;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-robot"></i></div><div style="background:#fff;border:1px solid var(--border);padding:.52rem .82rem;border-radius:14px;font-size:.79rem;color:var(--text3)">Thinking… (reading database)</div>`;
   container.appendChild(typingDiv);
   container.scrollTop = container.scrollHeight;
 
-  const systemPrompt = `You are the elite Chief Operating Officer (COO) for BUYSELL Nigeria.
+  // ── LIVE DATABASE CONTEXT INJECTION ──
+  let dbContext = '';
+  try {
+    const now = new Date();
+    // Fetch open disputes
+    const { data: disputes } = await db.from('disputes').select('id, order_id, dispute_type, description, status, created_at, buyer_id').eq('status', 'open').order('created_at', { ascending: false }).limit(20);
+    // Fetch all sellers + service providers with trial/commission info
+    const { data: sellers } = await db.from('profiles').select('id, name, email, role, commission_paid, trial_end, kyc_verified, created_at').in('role', ['seller', 'service_provider']).order('created_at', { ascending: false });
+    // Fetch pending receipts
+    const { data: receipts } = await db.from('commission_receipts').select('id, seller_id, status, created_at, profiles(name)').eq('status', 'pending').limit(10);
+    // Fetch recent orders
+    const { data: orders } = await db.from('orders').select('id, total_amount, status, created_at').order('created_at', { ascending: false }).limit(20);
+    // Fetch pending withdrawals
+    const { data: withdrawals } = await db.from('withdrawals').select('id, amount, status, seller_id, profiles(name)').eq('status', 'pending').limit(10);
+
+    const allSellers = sellers || [];
+    const paidSellers = allSellers.filter(s => s.commission_paid);
+    const trialSellers = allSellers.filter(s => !s.commission_paid && s.trial_end && new Date(s.trial_end) > now);
+    const expiredSellers = allSellers.filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now));
+    const serviceProviders = allSellers.filter(s => s.role === 'service_provider');
+    const expiredSPs = serviceProviders.filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now));
+
+    dbContext = `
+
+=== LIVE DATABASE SNAPSHOT ===
+SELLERS: ${allSellers.filter(s=>s.role==='seller').length} total (${paidSellers.filter(s=>s.role==='seller').length} paid, ${trialSellers.filter(s=>s.role==='seller').length} trial, ${expiredSellers.filter(s=>s.role==='seller').length} expired/unpaid)
+SERVICE PROVIDERS: ${serviceProviders.length} total (${serviceProviders.filter(s=>s.commission_paid).length} paid, ${expiredSPs.length} expired/unpaid)
+
+OPEN DISPUTES (${(disputes||[]).length}):
+${(disputes||[]).map(d => `  - #${d.id.substring(0,8)} | Order ${d.order_id} | Type: ${d.dispute_type} | "${(d.description||'').substring(0,80)}"`).join('\n') || '  None'}
+
+PENDING COMMISSION RECEIPTS (${(receipts||[]).length}):
+${(receipts||[]).map(r => `  - Receipt #${r.id.substring(0,8)} from ${r.profiles?.name || 'Unknown'}`).join('\n') || '  None'}
+
+PENDING WITHDRAWALS (${(withdrawals||[]).length}):
+${(withdrawals||[]).map(w => `  - ${fmtN(w.amount)} by ${w.profiles?.name || 'Seller'}`).join('\n') || '  None'}
+
+RECENT ORDERS (last 20): ${(orders||[]).length} orders, Total: ${fmtN((orders||[]).reduce((s,o)=>s+(o.total_amount||0),0))}
+  Pending: ${(orders||[]).filter(o=>o.status==='pending').length} | Confirmed: ${(orders||[]).filter(o=>o.status==='confirmed').length} | Delivered: ${(orders||[]).filter(o=>o.status==='delivered').length}
+
+EXPIRED/UNPAID USERS (candidates for suspension):
+${expiredSellers.filter(s=>s.role==='seller').map(s => `  - SELLER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}`).join('\n') || '  No expired sellers'}
+${expiredSPs.map(s => `  - SVC_PROVIDER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}`).join('\n') || '  No expired service providers'}
+=== END SNAPSHOT ===`;
+  } catch(e) {
+    dbContext = '\n[Database read failed – using cached stats only]';
+  }
+
+  const systemPrompt = `You are the elite Chief Operating Officer (COO) AI for BUYSELL Nigeria marketplace.
+You have FULL READ ACCESS to the live database and can execute administrative actions.
+
 Platform stats — Sellers: ${document.getElementById('adm-total-sellers')?.textContent || '?'}, 
 Buyers: ${document.getElementById('adm-total-buyers')?.textContent || '?'}, 
 Revenue: ${document.getElementById('adm-revenue')?.textContent || '?'}, 
 Open Disputes: ${document.getElementById('adm-disputes')?.textContent || '?'}.
-Help the admin manage sellers, orders, disputes, and revenue. 
-If the admin wants to suspend all unpaid expired sellers, include exactly [ACTION: SUSPEND_UNPAID_SELLERS] in your reply.
-Be direct, data-driven, and professional.`;
+${dbContext}
+
+=== YOUR POWERS ===
+You can perform these actions by including the EXACT token in your reply:
+1. [ACTION: SUSPEND_UNPAID_SELLERS] — Deactivate all sellers with expired trials who haven't paid
+2. [ACTION: SUSPEND_UNPAID_PROVIDERS] — Deactivate all service providers with expired trials who haven't paid  
+3. [ACTION: DEACTIVATE_USER:user_uuid_here] — Suspend a specific user by their UUID
+4. [ACTION: RESOLVE_DISPUTE:dispute_id_here] — Resolve a specific dispute
+5. [ACTION: APPROVE_RECEIPT:receipt_id_here] — Approve a pending commission receipt
+6. [ACTION: REFRESH_DATA] — Reload all admin dashboard data
+
+=== RULES ===
+- Always summarize what action you're taking and WHY before including the action token.
+- For destructive actions (suspensions/deactivations), explain the reason clearly.
+- When reading disputes, provide a clear summary with recommendations.
+- When analyzing sellers, flag those with recurring complaints.
+- Be proactive: if you see concerning patterns, alert the admin.
+- Be direct, data-driven, and professional. Use bullet points for clarity.
+- Reference specific user names and IDs when discussing individual cases.`;
 
   try {
     const reply = await callGroq(adminAiHistory, systemPrompt);
-
     let finalReply = reply;
+
+    // ── PARSE AND EXECUTE ACTIONS ──
+    // 1. Suspend unpaid sellers
     if (finalReply.includes('[ACTION: SUSPEND_UNPAID_SELLERS]')) {
-      finalReply = finalReply.replace('[ACTION: SUSPEND_UNPAID_SELLERS]', '').trim();
+      finalReply = finalReply.replace('[ACTION: SUSPEND_UNPAID_SELLERS]', '⚡ Executing seller suspension...').trim();
       executeMassSuspension();
+    }
+    // 2. Suspend unpaid service providers
+    if (finalReply.includes('[ACTION: SUSPEND_UNPAID_PROVIDERS]')) {
+      finalReply = finalReply.replace('[ACTION: SUSPEND_UNPAID_PROVIDERS]', '⚡ Executing provider suspension...').trim();
+      executeMassProviderSuspension();
+    }
+    // 3. Deactivate specific user
+    const deactivateMatch = finalReply.match(/\[ACTION: DEACTIVATE_USER:([a-f0-9-]+)\]/i);
+    if (deactivateMatch) {
+      const targetId = deactivateMatch[1];
+      finalReply = finalReply.replace(deactivateMatch[0], `⚡ Deactivating user ${targetId.substring(0,8)}...`);
+      await adminAiDeactivateUser(targetId);
+    }
+    // 4. Resolve dispute
+    const resolveMatch = finalReply.match(/\[ACTION: RESOLVE_DISPUTE:([a-f0-9-]+)\]/i);
+    if (resolveMatch) {
+      const disputeId = resolveMatch[1];
+      finalReply = finalReply.replace(resolveMatch[0], `✅ Resolving dispute ${disputeId.substring(0,8)}...`);
+      await adminAiResolveDispute(disputeId);
+    }
+    // 5. Approve receipt
+    const approveMatch = finalReply.match(/\[ACTION: APPROVE_RECEIPT:([a-f0-9-]+)\]/i);
+    if (approveMatch) {
+      const receiptId = approveMatch[1];
+      finalReply = finalReply.replace(approveMatch[0], `✅ Approving receipt ${receiptId.substring(0,8)}...`);
+      await adminAiApproveReceipt(receiptId);
+    }
+    // 6. Refresh data
+    if (finalReply.includes('[ACTION: REFRESH_DATA]')) {
+      finalReply = finalReply.replace('[ACTION: REFRESH_DATA]', '🔄 Refreshing dashboard...');
+      loadAdminOverview();
     }
 
     adminAiHistory.push({ role: 'assistant', content: finalReply });
@@ -1948,7 +2155,7 @@ Be direct, data-driven, and professional.`;
     document.getElementById('admin-typing')?.remove();
     const replyDiv = document.createElement('div');
     replyDiv.style.cssText = 'display:flex;gap:.42rem';
-    const formattedReply = escHtml(finalReply).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    const formattedReply = escHtml(finalReply).replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
     replyDiv.innerHTML = `<div style="background:var(--green-xlt);color:var(--green);font-size:.76rem;flex-shrink:0;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-robot"></i></div><div style="background:#fff;border:1px solid var(--border);padding:.52rem .82rem;border-radius:14px;font-size:.79rem;max-width:82%;line-height:1.5">${formattedReply}</div>`;
     container.appendChild(replyDiv);
 
@@ -1960,19 +2167,99 @@ Be direct, data-driven, and professional.`;
   container.scrollTop = container.scrollHeight;
 }
 
+
 async function executeMassSuspension() {
-  toast('Executing Enforcement', 'AI is scanning and suspending unpaid stores...', 'info', 3000);
-  const { data: sellers } = await db.from('profiles').select('id, commission_paid, trial_end').eq('role', 'seller');
-  if (!sellers) { toast('Suspension Failed', 'Could not retrieve sellers list', 'error'); return; }
+  toast('Executing Enforcement', 'AI is scanning and suspending unpaid sellers...', 'info', 3000);
+  
+  const { data: sellers } = await db.from('profiles').select('id, name, commission_paid, trial_end').eq('role', 'seller');
+  if (!sellers) {
+    toast('Suspension Failed', 'Could not retrieve sellers list', 'error');
+    return;
+  }
+  
   const now = new Date();
   const targetIds = sellers
     .filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now))
     .map(s => s.id);
-  if (targetIds.length === 0) { toast('No Actions Needed', 'All sellers are paid or still within trial', 'success', 5000); return; }
+    
+  if (targetIds.length === 0) {
+    toast('No Actions Needed', 'All sellers are paid or still within trial', 'success', 5000);
+    return;
+  }
+  
+  // Deactivate products of suspended sellers
+  await db.from('products').update({ status: 'paused' }).in('seller_id', targetIds).catch(() => {});
   const { error } = await db.from('profiles').update({ updated_at: new Date().toISOString() }).in('id', targetIds);
-  if (error) { toast('Execution Error', error.message, 'error'); return; }
+  
+  if (error) {
+    toast('Execution Error', error.message, 'error');
+    return;
+  }
+  
   toast('Enforcement Complete', `Successfully locked out ${targetIds.length} expired accounts.`, 'success', 6000);
-  loadAdminOverview(); 
+  loadAdminOverview();
+}
+
+// ====================================================
+//  AI ACTION HANDLERS
+// ====================================================
+async function executeMassProviderSuspension() {
+  toast('Suspending Providers', 'AI is scanning service providers...', 'info', 3000);
+  const { data: providers } = await db.from('profiles').select('id, name, commission_paid, trial_end').eq('role', 'service_provider');
+  if (!providers) { toast('Failed', 'Could not retrieve providers', 'error'); return; }
+
+  const now = new Date();
+  const targetIds = providers
+    .filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now))
+    .map(s => s.id);
+
+  if (!targetIds.length) { toast('No Action Needed', 'All providers are paid or in trial', 'success'); return; }
+
+  // Pause their gigs
+  await db.from('service_gigs').update({ status: 'paused' }).in('provider_id', targetIds).catch(() => {});
+  const { error } = await db.from('profiles').update({ updated_at: new Date().toISOString() }).in('id', targetIds);
+  if (error) { toast('Error', error.message, 'error'); return; }
+
+  toast('Providers Suspended', `${targetIds.length} expired accounts locked out`, 'success', 6000);
+  loadAdminOverview();
+}
+
+async function adminAiDeactivateUser(userId) {
+  try {
+    // Pause all their products/gigs
+    await db.from('products').update({ status: 'paused' }).eq('seller_id', userId).catch(() => {});
+    await db.from('service_gigs').update({ status: 'paused' }).eq('provider_id', userId).catch(() => {});
+    // Mark commission as unpaid to trigger lockout
+    await db.from('profiles').update({ commission_paid: false, trial_end: new Date('2020-01-01').toISOString() }).eq('id', userId);
+    toast('User Deactivated', `User ${userId.substring(0,8)} has been suspended by AI`, 'warn', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Deactivation Failed', e.message, 'error');
+  }
+}
+
+async function adminAiResolveDispute(disputeId) {
+  try {
+    await db.from('disputes').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', disputeId);
+    toast('Dispute Resolved', `Dispute ${disputeId.substring(0,8)} closed by AI`, 'success');
+    loadAdminDisputes();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiApproveReceipt(receiptId) {
+  try {
+    const { data: receipt } = await db.from('commission_receipts').select('seller_id').eq('id', receiptId).single();
+    if (receipt?.seller_id) {
+      await db.from('profiles').update({ commission_paid: true }).eq('id', receipt.seller_id);
+    }
+    await db.from('commission_receipts').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', receiptId);
+    toast('Receipt Approved', 'Seller activated by AI', 'success');
+    loadAdminReceipts();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  } 
 }
    
 async function loadAdminSellers() {
@@ -2057,6 +2344,7 @@ function _renderAdminSellerList(sellers) {
 async function adminToggleCommission(id, paid) {
   try { await callEdge('admin-action', { action: 'toggle_commission', target_id: id, data: { commission_paid: paid } }); }
   catch(e) { toast('Error', e.message, 'error'); return; }
+  // Optimistic update on card
   const card = document.getElementById('asc-' + id);
   if (card) {
     const badge = card.querySelector('.badge');
@@ -2076,6 +2364,7 @@ async function adminDeleteSeller(id) {
   loadAdminSellers();
 }
 
+/* ── ORDERS ── */
 async function loadAdminOrders() {
   if (!isAdmin()) return;
   document.getElementById('adm-orders-skeleton').classList.remove('hidden');
@@ -2123,6 +2412,7 @@ async function adminUpdateOrder(id, status) {
   } catch(e) { toast('Error', e.message, 'error'); }
 }
 
+/* ── DISPUTES ── */
 async function loadAdminDisputes() {
   if (!isAdmin()) return;
   const { data: disputes } = await db.from('disputes').select('*').order('created_at',{ascending:false}).limit(60);
@@ -2164,6 +2454,7 @@ async function refundDispute(disputeId, orderId) {
   loadAdminDisputes();
 }
 
+/* ── WITHDRAWALS ── */
 async function loadAdminWithdrawals() {
   if (!isAdmin()) return;
   document.getElementById('adm-wd-skeleton').classList.remove('hidden');
@@ -2216,6 +2507,7 @@ async function adminRejectWithdrawal(id) {
   loadAdminWithdrawals();
 }
 
+/* ── BROADCAST ── */
 async function sendBroadcast() {
   if (!isAdmin()) return;
   const title  = document.getElementById('bc-title').value.trim();
@@ -2255,7 +2547,9 @@ function checkAndPromptKyc() {
   if (!currentUser?.profile) return false;
   const role = currentUser.profile.role;
   if (role !== 'seller' && role !== 'service_provider') return true;
+  
   if (currentUser.profile.kyc_verified || currentUser.profile.kyc_status === 'approved') return true;
+  
   const statusEl = document.getElementById('kyc-status-banner');
   if (currentUser.profile.kyc_status === 'pending') {
     statusEl.innerHTML = '<i class="fa-solid fa-clock text-xl"></i> <div><b>Verification Pending</b><br>Your KYC documents are currently under review.</div>';
@@ -2266,11 +2560,13 @@ function checkAndPromptKyc() {
     showModal('kyc-modal');
     return false;
   }
+  
   if (currentUser.profile.kyc_status === 'rejected') {
     statusEl.innerHTML = '<i class="fa-solid fa-exclamation-triangle text-xl"></i> <div><b>Verification Rejected</b><br>Please resubmit your documents with clear photos.</div>';
     statusEl.style.background = '#fee2e2'; statusEl.style.color = '#b91c1c';
     statusEl.classList.remove('hidden');
   }
+
   showModal('kyc-modal');
   return false;
 }
@@ -2280,10 +2576,13 @@ async function submitKyc(e) {
   if (!currentUser) return;
   const btn = document.getElementById('kyc-submit-btn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading...';
+  
   try {
     const docType = document.getElementById('kyc-doc-type').value;
     const docNum  = document.getElementById('kyc-doc-number').value.trim();
     const name    = document.getElementById('kyc-full-name').value.trim();
+    
+    // Upload files
     const uploadFile = async (id) => {
       const el = document.getElementById(id);
       if (!el.files?.[0]) return null;
@@ -2294,10 +2593,13 @@ async function submitKyc(e) {
       if (error) throw new Error(`Failed to upload ${id}`);
       return db.storage.from('uploads').getPublicUrl(path).data.publicUrl;
     };
+
     const [frontUrl, backUrl, selfieUrl] = await Promise.all([
       uploadFile('kyc-front'), uploadFile('kyc-back'), uploadFile('kyc-selfie')
     ]);
+
     if (!frontUrl || !selfieUrl) throw new Error("Front photo and selfie are required");
+
     await db.from('kyc_verifications').insert({
       user_id: currentUser.id,
       document_type: docType,
@@ -2308,27 +2610,36 @@ async function submitKyc(e) {
       selfie_url: selfieUrl,
       status: 'pending'
     });
+
     await db.from('profiles').update({ kyc_status: 'pending' }).eq('id', currentUser.id);
     currentUser.profile.kyc_status = 'pending';
+    
     toast('KYC Submitted', ' documents are pending review', 'success');
     closeModal('kyc-modal');
-    checkAndPromptKyc();
+    checkAndPromptKyc(); // updates modal UI
   } catch(e) {
     toast('Error', e.message, 'error');
     btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-shield-check"></i> Submit Verification';
   }
 }
 
+// Admin KYC management
 async function loadAdminKyc() {
   if (!guardAdminPanel()) return;
   const filter = document.getElementById('adm-kyc-filter').value;
   let q = db.from('kyc_verifications').select('*, profiles(name, email, role)').order('created_at', { ascending: false });
   if (filter !== 'all') q = q.eq('status', filter);
+  
   const { data: kycs, error } = await q;
   document.getElementById('adm-kyc-skeleton').classList.add('hidden');
   const list = document.getElementById('adm-kyc-list');
   const empty = document.getElementById('adm-kyc-empty');
-  if (error || !kycs?.length) { list.classList.add('hidden'); empty.classList.remove('hidden'); return; }
+  
+  if (error || !kycs?.length) {
+    list.classList.add('hidden'); empty.classList.remove('hidden');
+    return;
+  }
+  
   list.classList.remove('hidden'); empty.classList.add('hidden');
   list.innerHTML = kycs.map(k => `
     <div class="card card-pad mb-3" style="border-left: 4px solid ${k.status==='approved'?'var(--green)':k.status==='rejected'?'var(--red)':'var(--gold)'}">
@@ -2386,18 +2697,26 @@ async function loadAdminReceipts() {
     const { data: receipts } = await db.from('commission_receipts')
       .select('*, profiles(name, email)')
       .order('created_at', { ascending: false });
+
     const all = receipts || [];
     const pending  = all.filter(r => r.status === 'pending').length;
     const approved = all.filter(r => r.status === 'approved').length;
     const rejected = all.filter(r => r.status === 'rejected').length;
+
     document.getElementById('rcpt-pending').textContent  = pending;
     document.getElementById('rcpt-approved').textContent = approved;
     document.getElementById('rcpt-rejected').textContent = rejected;
+
     const tbody = document.getElementById('rcpt-table-body');
-    if (!all.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text3)">No receipts submitted yet</td></tr>'; return; }
+    if (!all.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text3)">No receipts submitted yet</td></tr>';
+      return;
+    }
+
     tbody.innerHTML = all.map(r => {
       const sellerName = r.profiles?.name || r.profiles?.email || 'Unknown';
-      const statusBadge = r.status === 'approved' ? 'badge-green' : r.status === 'rejected' ? 'badge-red' : 'badge-gold';
+      const statusBadge = r.status === 'approved' ? 'badge-green'
+        : r.status === 'rejected' ? 'badge-red' : 'badge-gold';
       const actions = r.status === 'pending'
         ? `<button class="btn btn-primary btn-sm" onclick="approveReceipt('${r.id}','${r.seller_id}')" style="margin-right:.3rem"><i class="fa-solid fa-check"></i></button><button class="btn btn-outline btn-sm" style="color:var(--red);border-color:var(--red)" onclick="rejectReceipt('${r.id}')"><i class="fa-solid fa-times"></i></button>`
         : `<span class="text-xs color-text3">${r.status}</span>`;
@@ -2410,26 +2729,47 @@ async function loadAdminReceipts() {
         <td>${actions}</td>
       </tr>`;
     }).join('');
-  } catch(e) { console.error('loadAdminReceipts error:', e); }
+  } catch(e) {
+    console.error('loadAdminReceipts error:', e);
+  }
 }
 
 async function approveReceipt(receiptId, sellerId) {
   if (!confirm('Approve this receipt and activate the seller?')) return;
   try {
-    await db.from('commission_receipts').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', receiptId);
-    await db.from('profiles').update({ commission_paid: true, updated_at: new Date().toISOString() }).eq('id', sellerId);
+    // 1. Update receipt status
+    await db.from('commission_receipts').update({
+      status: 'approved',
+      reviewed_at: new Date().toISOString()
+    }).eq('id', receiptId);
+
+    // 2. Activate the seller's commission_paid flag
+    await db.from('profiles').update({
+      commission_paid: true,
+      updated_at: new Date().toISOString()
+    }).eq('id', sellerId);
+
     toast('Receipt Approved ✅', 'Seller store is now active.', 'success');
     loadAdminReceipts();
-  } catch(e) { toast('Error', e.message, 'error'); }
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
 }
 
 async function rejectReceipt(receiptId) {
   const note = prompt('Reason for rejection (optional):') || '';
   try {
-    await db.from('commission_receipts').update({ status: 'rejected', admin_note: note, reviewed_at: new Date().toISOString() }).eq('id', receiptId);
+    await db.from('commission_receipts').update({
+      status: 'rejected',
+      admin_note: note,
+      reviewed_at: new Date().toISOString()
+    }).eq('id', receiptId);
+
     toast('Receipt Rejected', 'Seller has been notified.', 'warn');
     loadAdminReceipts();
-  } catch(e) { toast('Error', e.message, 'error'); }
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
 }
 
 async function checkBroadcastForUser() {
@@ -2440,6 +2780,7 @@ async function checkBroadcastForUser() {
   (bcs||[]).forEach((b, i) => setTimeout(() => toast(b.title, b.body, b.type||'info', 7000), i * 2200));
 }
 
+/* ── REVENUE CHART ── */
 function _renderAdminRevenueChart(orders) {
   const ctx = document.getElementById('admin-revenue-chart');
   if (!ctx) return;
@@ -2502,9 +2843,9 @@ Help users shop, track orders, find products, and navigate the platform. Keep re
     const fallback = "Sorry, I'm having trouble right now. WhatsApp us at 09061484256 for instant help!";
     const typingEl = document.getElementById(typingId);
     if (typingEl) typingEl.querySelector('.cb-bubble').textContent = fallback;
-    chatHistory.push({ role: 'assistant', content: fallback });
   }
 }
+
 
 function getCurrentPage() {
   if (document.getElementById('seller-dashboard')?.style.display !== 'none') return 'seller-dashboard';
@@ -2513,6 +2854,7 @@ function getCurrentPage() {
   return 'buyer-marketplace';
 }
 
+// Updated addChatMsg — accepts optional id for typing indicator replacement
 function addChatMsg(text, sender, id = null) {
   const container = document.getElementById('chat-messages');
   const div       = document.createElement('div');
@@ -2530,16 +2872,19 @@ function addChatMsg(text, sender, id = null) {
   container.scrollTop = container.scrollHeight;
 }
 
+// Clear history when chat is closed (optional — remove to keep memory)
 function toggleChat() {
   const win = document.getElementById('chatbot-window');
+  const wasOpen = win.classList.contains('open');
   win.classList.toggle('open');
+  // Optionally reset history on open for a fresh session:
+  // if (!wasOpen) chatHistory = [];
 }
 
 function askBot(q) {
   document.getElementById('chat-input').value = q;
   sendChat();
 }
-
 // ====================================================
 //  CSV BULK UPLOAD
 // ====================================================
@@ -2640,14 +2985,23 @@ function shareProduct(prod) {
   }
 }
 
+// Handle ?product= in URL for direct product links
 async function handleDeepLink() {
   const params = new URLSearchParams(window.location.search);
   const productId = params.get('product');
   const storeId = params.get('store');
   const refCode = params.get('ref');
-  if (productId) { await loadProducts(); openProduct(productId); }
-  if (storeId) { viewStorefront(storeId); }
-  if (refCode) { localStorage.setItem('bs_ref', refCode); }
+  if (productId) {
+    await loadProducts();
+    openProduct(productId);
+  }
+  if (storeId) {
+    viewStorefront(storeId);
+  }
+  if (refCode) {
+    // Track referral click
+    localStorage.setItem('bs_ref', refCode);
+  }
 }
 
 // ====================================================
@@ -2666,6 +3020,7 @@ function sendWhatsAppOrderNotification(order, sellerWa) {
     `Deliver to:\n${order.delivery_name}\n${order.delivery_phone}\n${order.delivery_address}\n\n` +
     `Log in to dashboard to confirm: https://buysell.ng`
   );
+  // Open in background tab (silent notification fallback)
   const waUrl = `https://wa.me/${phone}?text=${msg}`;
   const link = document.createElement('a');
   link.href = waUrl; link.target = '_blank'; link.rel = 'noopener';
@@ -2674,6 +3029,7 @@ function sendWhatsAppOrderNotification(order, sellerWa) {
   document.body.removeChild(link);
 }
 
+// Full saveOrderToDb implementation (with WA notification)
 async function saveOrderToDb(txRef, method, paystackRef, proofUrl='') {
   try {
     const result = await callEdge('create-order', {
@@ -2694,8 +3050,10 @@ async function saveOrderToDb(txRef, method, paystackRef, proofUrl='') {
     const orderId = result.order_id;
     const total   = result.total;
 
+    // Clear referral cookie
     localStorage.removeItem('bs_ref');
 
+    // WhatsApp notification to seller
     const seller = cart[0]?.profiles;
     if (seller?.whatsapp) sendWhatsAppOrderNotification({ id: orderId, total_amount: total }, seller.whatsapp);
 
@@ -2711,8 +3069,9 @@ async function saveOrderToDb(txRef, method, paystackRef, proofUrl='') {
 }
 
 // ====================================================
-//  STOREFRONT
+//  STOREFRONT SALES COUNT
 // ====================================================
+// viewStorefront — full implementation with order count + reviews
 async function viewStorefront(sellerId) {
   if (!sellerId) return;
   closeModal('product-modal');
@@ -2727,14 +3086,17 @@ async function viewStorefront(sellerId) {
   const { data: prods } = await db.from('products').select('*').eq('seller_id', sellerId).eq('status','active');
   const sfProds = prods || [];
   document.getElementById('sf-prod-count').textContent = sfProds.length;
+  // Real order count
   const { count: orderCount } = await db.from('orders').select('id', { count: 'exact', head: true }).eq('seller_id', sellerId);
   document.getElementById('sf-sales-count').textContent = (orderCount||0) + '+';
+  // Reviews
   const { data: revs } = await db.from('reviews').select('rating').in('product_id', sfProds.map(p=>p.id));
   const allRevs = revs || [];
   const avgRating = allRevs.length ? (allRevs.reduce((s,r)=>s+r.rating,0)/allRevs.length).toFixed(1) : '5.0';
   document.getElementById('sf-rating').textContent = avgRating;
   document.getElementById('sf-review-count').textContent = `${allRevs.length} reviews`;
   document.getElementById('sf-stars').textContent = '★'.repeat(Math.round(+avgRating))+'☆'.repeat(5-Math.round(+avgRating));
+  // Share button URL
   const sfUrl = `${window.location.origin}${window.location.pathname}?store=${sellerId}`;
   document.getElementById('sf-wa-link').parentElement.querySelectorAll('button').forEach(b => {
     if (b.textContent.includes('Share')) b.onclick = () => { navigator.clipboard?.writeText(sfUrl).then(()=>toast('Store Link Copied!','','success')).catch(()=>{}); if(navigator.share) navigator.share({title:seller.name,url:sfUrl}); };
@@ -2743,6 +3105,7 @@ async function viewStorefront(sellerId) {
   const empty = document.getElementById('sf-empty');
   if (!sfProds.length) { grid.innerHTML=''; empty.classList.remove('hidden'); }
   else { empty.classList.add('hidden'); grid.innerHTML = sfProds.map(p=>prodCard(p)).join(''); }
+  // Update page title
   document.title = `${seller.name} — BUYSELL Nigeria`;
   history.pushState(null,'',`?store=${sellerId}`);
 }
@@ -2763,9 +3126,11 @@ function escHtml(s) {
     .replace(/\//g,'&#x2F;');
 }
 function escAttr(s) {
+  // Safe for use inside HTML attributes
   return String(s||'').replace(/[^a-zA-Z0-9 _\-\.,:@]/g, c => '&#'+c.charCodeAt(0)+';');
 }
 function sanitizeUrl(url) {
+  // Block javascript: and data: URIs
   if (!url) return '';
   const u = String(url).trim().toLowerCase();
   if (u.startsWith('javascript:') || u.startsWith('data:text') || u.startsWith('vbscript:')) return '';
@@ -2774,58 +3139,91 @@ function sanitizeUrl(url) {
 
 let pickupMap = null;
 let currentMode = 'home';
-let currentMarkers = [];
+let currentMarkers = []; // Keeps track of active pins so we can delete them when the state changes
 
 function setDeliveryMode(mode) {
   currentMode = mode;
   const isPickup = mode === 'pickup';
+  
+  // Toggle UI
   document.getElementById('pickup-container').classList.toggle('hidden', !isPickup);
   document.getElementById('btn-pickup').className = isPickup ? 'btn btn-primary btn-sm flex-1' : 'btn btn-outline btn-sm flex-1';
   document.getElementById('btn-home').className = !isPickup ? 'btn btn-primary btn-sm flex-1' : 'btn btn-outline btn-sm flex-1';
+  
+  // Clear inputs if switching back to home delivery
   if (!isPickup) {
     document.getElementById('selected-hub-input').value = '';
     document.getElementById('co-address').value = '';
   }
+  
   document.getElementById('addr-label').textContent = isPickup ? "Pickup Instructions" : "Delivery Address";
   document.getElementById('co-address').placeholder = isPickup ? "e.g. I will be there by 4pm" : "Street, area, city, state";
-  if (isPickup) { initLeaflet(); }
+
+  if (isPickup) {
+    initLeaflet();
+  }
 }
 
 function initLeaflet() {
+  // Always give the browser a moment to render the modal container
   setTimeout(() => {
     if (!pickupMap) {
+      // Initialize map centered on Nigeria
       pickupMap = L.map('map').setView([9.0820, 8.6753], 6); 
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(pickupMap);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+      }).addTo(pickupMap);
     }
-    pickupMap.invalidateSize();
+    
+    pickupMap.invalidateSize(); // Fixes the gray-box modal rendering bug
+    
+    // Load the hubs for whichever state is currently selected in the dropdown
     const initialState = document.getElementById('state-selector').value;
     loadHubsForState(initialState);
+    
   }, 300);
 }
 
+// NEW: Dynamic Supabase Fetcher
 async function loadHubsForState(stateName) {
+  // 1. Clear old pins from the map
   currentMarkers.forEach(marker => pickupMap.removeLayer(marker));
   currentMarkers = [];
+  
   document.getElementById('selected-hub-input').placeholder = "Fetching secure hubs...";
-  document.getElementById('selected-hub-input').value = "";
+  document.getElementById('selected-hub-input').value = ""; // Reset selection
+
   try {
-    const { data, error } = await db.from('safe_hubs').select('*').eq('state', stateName).eq('is_active', true);
+    // 2. Fetch live data from Supabase
+    const { data, error } = await db
+      .from('safe_hubs')
+      .select('*')
+      .eq('state', stateName)
+      .eq('is_active', true);
+
     if (error) throw error;
+
     if (data && data.length > 0) {
-      const bounds = [];
+      const bounds = []; // Used to auto-zoom the map perfectly
+
       data.forEach(hub => {
         const marker = L.marker([hub.latitude, hub.longitude]).addTo(pickupMap);
         marker.bindPopup(`<b class="hub-label">${hub.name}</b><br>${hub.info}`);
+        
         marker.on('click', () => {
           document.getElementById('selected-hub-input').value = hub.name;
           document.getElementById('co-address').value = `VERIFIED HUB: ${hub.name} (${hub.info})`;
           toast('Hub Selected', hub.name, 'success');
         });
+
         currentMarkers.push(marker);
         bounds.push([hub.latitude, hub.longitude]);
       });
+
+      // 3. Auto-zoom map to fit all the new pins perfectly
       pickupMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
       document.getElementById('selected-hub-input').placeholder = "Click a pin on the map";
+      
     } else {
       document.getElementById('selected-hub-input').placeholder = "No verified hubs in this state yet.";
     }
@@ -2834,7 +3232,7 @@ async function loadHubsForState(stateName) {
     toast('Map Error', 'Could not load safe hubs. Check your connection.', 'error');
   }
 }
-
+// Share product from detail modal
 function shareCurrentProduct() {
   if (currentProd) shareProduct(currentProd);
 }
@@ -2849,6 +3247,7 @@ function shareCurrentProduct() {
   updateCartCount();
   handleDeepLink();
   checkBroadcastForUser();
+  // Real-time order updates for sellers
   db.channel('orders-rt').on('postgres_changes',{event:'INSERT',schema:'public',table:'orders'},payload=>{
     if (currentRole==='seller' && payload.new?.seller_id===currentUser?.id) {
       toast('New Order! 🛍️', 'Check your orders panel', 'success', 6000);
@@ -2856,6 +3255,7 @@ function shareCurrentProduct() {
       loadSellerStats();
     }
   }).subscribe();
+  // Real-time low stock alerts
   db.channel('stock-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'products'},payload=>{
     const p = payload.new;
     if (currentRole==='seller' && p?.seller_id===currentUser?.id && p?.stock_quantity !== undefined && p?.low_stock_alert && p.stock_quantity <= p.low_stock_alert && p.stock_quantity > 0) {
@@ -2864,9 +3264,7 @@ function shareCurrentProduct() {
   }).subscribe();
 })();
 
-// ====================================================
-//  SECURITY & VALIDATION
-// ====================================================
+// --- PHASE 1-4 INJECTIONS ---
 function validateInput(str) {
   if (typeof str !== 'string') return '';
   const invalid = /<script.*?>.*?<\/script>|<.*?on\w+?=.*?>|(SELECT|INSERT|UPDATE|DELETE|DROP|UNION)\s+/i;
@@ -2878,9 +3276,13 @@ function validateInput(str) {
 }
 
 function showAdminPortal() {
+  // Admin uses the seller dashboard with the admin tab active
+  // (The ds-admin section contains all admin tabs and is gated by guardAdminPanel)
   showSellerDashboard();
+  // After render, switch to the admin section
   setTimeout(() => {
     showDash('admin');
+    // Populate spd user info if relevant
     if (currentUser) {
       const dash = document.getElementById('dash-user-name');
       if (dash) dash.textContent = currentUser.profile?.name || 'Admin';
@@ -2891,16 +3293,26 @@ function showAdminPortal() {
 
 function showServiceDashboard() {
   if (!currentUser) { showModal('auth-modal'); toggleAuth('login'); return; }
+  if (!checkAndPromptKyc()) return;
   document.getElementById('buyer-view').style.display = 'none';
   document.getElementById('seller-dashboard').style.display = 'none';
   document.getElementById('storefront-view').style.display = 'none';
+  if(document.getElementById('admin-portal-view')) document.getElementById('admin-portal-view').style.display = 'none';
+
   document.getElementById('service-provider-view').style.display = 'block';
   document.body.classList.add('in-seller');
   currentRole = 'service_provider';
+
+  // Populate user info in SPD sidebar
   const nameEl  = document.getElementById('spd-user-name');
   const emailEl = document.getElementById('spd-user-email');
   if (nameEl)  nameEl.textContent  = currentUser.profile?.name  || 'Service Pro';
   if (emailEl) emailEl.textContent = currentUser.email || '';
+
+  // Commission / trial check (same rules as sellers)
+  checkServiceProviderCommission();
+
+  // Load data and show default section
   showSpdDash('overview');
   loadMyGigs();
 }
@@ -2914,7 +3326,9 @@ function copyReferralLink() {
 }
 
 function importDropshipProduct(btn, productId) {
+  // Security validation (Phase 4 mock)
   btn.innerHTML = '<span class="spin-anim"><i class="fa-solid fa-circle-notch"></i></span> Importing...';
+  // Mock backend delay
   setTimeout(() => {
     btn.innerHTML = '<i class="fa-solid fa-check"></i> Imported';
     btn.classList.add('btn-imported');
@@ -2922,20 +3336,31 @@ function importDropshipProduct(btn, productId) {
   }, 1200);
 }
 
+
 function showSpdDash(section) {
+  // Hide all sections by adding .hidden class
   document.querySelectorAll('.spd-section').forEach(s => s.classList.add('hidden'));
+  // Deactivate all nav items
   document.querySelectorAll('#spd-sidebar .dash-nav-item').forEach(n => n.classList.remove('active'));
+  
+  // Show target by removing .hidden class
   const el = document.getElementById(`spd-sec-${section}`);
   if (el) el.classList.remove('hidden');
+  
+  // Activate target nav
   const navEl = document.getElementById(`spd-nav-${section}`);
   if (navEl) navEl.classList.add('active');
-  if (section === 'overview')  loadSpdOverview();
-  if (section === 'portfolio') loadMyGigs();
-  if (section === 'settings')  loadSpdSettings();
+
+  // Load section-specific data
+  if (section === 'overview')   loadSpdOverview();
+  if (section === 'portfolio')  loadMyGigs();
+  if (section === 'bookings')   loadProviderBookings();
+  if (section === 'earnings')   loadProviderEarnings();
+  if (section === 'settings')   loadSpdSettings();
 }
 
 // ====================================================
-//  SERVICE ECONOMY — Browse & Filter
+//  SERVICE ECONOMY — Browse & Filter (Buyer Side)
 // ====================================================
 let _allServiceGigs = [];
 
@@ -2943,8 +3368,12 @@ async function loadServiceGigs() {
   document.getElementById('svc-skeleton').classList.remove('hidden');
   document.getElementById('svc-grid').classList.add('hidden');
   document.getElementById('svc-empty').classList.add('hidden');
+
   try {
-    const { data, error } = await db.from('service_gigs').select('*, profiles(name, whatsapp)').eq('status', 'active').order('created_at', { ascending: false });
+    const { data, error } = await db.from('service_gigs')
+      .select('*, profiles(name, whatsapp)')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
     if (error) throw error;
     _allServiceGigs = data || [];
     renderServiceCards(_allServiceGigs);
@@ -2955,20 +3384,41 @@ async function loadServiceGigs() {
 }
 
 function filterServices(category) {
-  document.querySelectorAll('[data-svc]').forEach(c => { c.classList.toggle('active', c.dataset.svc === category); });
-  if (category === 'all') { renderServiceCards(_allServiceGigs); }
-  else { renderServiceCards(_allServiceGigs.filter(g => g.category === category)); }
+  // Update active chip
+  document.querySelectorAll('[data-svc]').forEach(c => {
+    c.classList.toggle('active', c.dataset.svc === category);
+  });
+  if (category === 'all') {
+    renderServiceCards(_allServiceGigs);
+  } else {
+    renderServiceCards(_allServiceGigs.filter(g => g.category === category));
+  }
 }
 
 function renderServiceCards(gigs) {
   document.getElementById('svc-skeleton').classList.add('hidden');
   document.getElementById('svc-count').textContent = gigs.length;
-  if (!gigs.length) { document.getElementById('svc-grid').classList.add('hidden'); document.getElementById('svc-empty').classList.remove('hidden'); return; }
+
+  if (!gigs.length) {
+    document.getElementById('svc-grid').classList.add('hidden');
+    document.getElementById('svc-empty').classList.remove('hidden');
+    return;
+  }
   document.getElementById('svc-empty').classList.add('hidden');
   const grid = document.getElementById('svc-grid');
   grid.classList.remove('hidden');
-  const categoryIcons = { 'Plumbing':'fa-faucet-drip','Electrical':'fa-bolt','Cleaning':'fa-broom','Tailoring':'fa-scissors','Carpentry':'fa-hammer','Painting':'fa-paint-roller','Photography':'fa-camera','Design':'fa-pen-nib','Catering':'fa-utensils','Other':'fa-tools' };
-  const categoryColors = { 'Plumbing':'#3b82f6','Electrical':'#f59e0b','Cleaning':'#10b981','Tailoring':'#8b5cf6','Carpentry':'#d97706','Painting':'#ec4899','Photography':'#6366f1','Design':'#14b8a6','Catering':'#f43f5e','Other':'#6b7280' };
+
+  const categoryIcons = {
+    'Plumbing': 'fa-faucet-drip', 'Electrical': 'fa-bolt', 'Cleaning': 'fa-broom',
+    'Tailoring': 'fa-scissors', 'Carpentry': 'fa-hammer', 'Painting': 'fa-paint-roller',
+    'Photography': 'fa-camera', 'Design': 'fa-pen-nib', 'Catering': 'fa-utensils', 'Other': 'fa-tools'
+  };
+  const categoryColors = {
+    'Plumbing': '#3b82f6', 'Electrical': '#f59e0b', 'Cleaning': '#10b981',
+    'Tailoring': '#8b5cf6', 'Carpentry': '#d97706', 'Painting': '#ec4899',
+    'Photography': '#6366f1', 'Design': '#14b8a6', 'Catering': '#f43f5e', 'Other': '#6b7280'
+  };
+
   grid.innerHTML = gigs.map(g => {
     const icon = categoryIcons[g.category] || 'fa-tools';
     const color = categoryColors[g.category] || 'var(--green)';
@@ -3022,11 +3472,18 @@ function renderServiceCards(gigs) {
 async function loadSpdOverview() {
   if (!currentUser) return;
   try {
-    const { data: gigs } = await db.from('service_gigs').select('id, title, category, starting_rate, status, portfolio_urls').eq('provider_id', currentUser.id);
+    // Load gig count
+    const { data: gigs } = await db.from('service_gigs')
+      .select('id, title, category, starting_rate, status, portfolio_urls')
+      .eq('provider_id', currentUser.id);
     const activeGigs = (gigs || []).filter(g => g.status === 'active');
+    
     document.getElementById('spd-gigs').textContent = activeGigs.length;
-    document.getElementById('spd-views').textContent = activeGigs.length * 12;
+    // Views and leads are placeholders for now until analytics wired
+    document.getElementById('spd-views').textContent = activeGigs.length * 12; // estimated
     document.getElementById('spd-leads').textContent = activeGigs.length > 0 ? Math.floor(activeGigs.length * 3) : 0;
+
+    // Populate recent leads section with active gig summary cards
     const leadsContainer = document.querySelector('#spd-sec-overview .card.card-pad.mb-4');
     if (leadsContainer && activeGigs.length > 0) {
       leadsContainer.innerHTML = `
@@ -3065,7 +3522,9 @@ async function saveServiceProfile() {
   const name = document.getElementById('spd-s-name')?.value.trim();
   const wa   = document.getElementById('spd-s-wa')?.value.trim();
   const bio  = document.getElementById('spd-s-bio')?.value.trim();
+
   if (!name) { toast('Name required', '', 'warn'); return; }
+
   try {
     const { error } = await db.from('profiles').update({
       name:              validateInput(name),
@@ -3073,22 +3532,33 @@ async function saveServiceProfile() {
       store_description: validateInput(bio),
       updated_at:        new Date().toISOString()
     }).eq('id', currentUser.id);
+    
     if (error) throw error;
+    
+    // Update local profile
     currentUser.profile.name = name;
     currentUser.profile.whatsapp = wa;
     currentUser.profile.store_description = bio;
+    
+    // Update sidebar display
     document.getElementById('spd-user-name').textContent = name;
+    
     toast('Profile Saved! ✅', 'Your changes are now live.', 'success');
-  } catch(e) { toast('Save Failed', e.message, 'error'); }
+  } catch(e) {
+    toast('Save Failed', e.message, 'error');
+  }
 }
 
 // ====================================================
-//  SERVICE PROVIDER — Load My Gigs
+//  SERVICE PROVIDER — Load My Gigs (Portfolio)
 // ====================================================
 async function loadMyGigs() {
   if (!currentUser) return;
   try {
-    const { data } = await db.from('service_gigs').select('*').eq('provider_id', currentUser.id).order('created_at', { ascending: false });
+    const { data } = await db.from('service_gigs')
+      .select('*')
+      .eq('provider_id', currentUser.id)
+      .order('created_at', { ascending: false });
     const gigs = data || [];
     const countEl = document.getElementById('spd-gigs');
     if (countEl) countEl.textContent = gigs.filter(g => g.status === 'active').length;
@@ -3104,7 +3574,10 @@ async function loadMyGigs() {
       return `
       <div class="card mb-3" style="overflow:hidden;border-left:3px solid ${g.status==='active'?'var(--green)':'var(--red)'}">
         <div style="display:flex;gap:.75rem;padding:1rem">
-          ${thumb ? `<img src="${thumb}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;flex-shrink:0">` : `<div style="width:72px;height:72px;border-radius:10px;background:var(--green-xlt);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa-solid fa-tools" style="color:var(--green);font-size:1.3rem"></i></div>`}
+          ${thumb 
+            ? `<img src="${thumb}" style="width:72px;height:72px;object-fit:cover;border-radius:10px;flex-shrink:0">`
+            : `<div style="width:72px;height:72px;border-radius:10px;background:var(--green-xlt);display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="fa-solid fa-tools" style="color:var(--green);font-size:1.3rem"></i></div>`
+          }
           <div style="flex:1;min-width:0">
             <div style="display:flex;justify-content:space-between;align-items:start;gap:.5rem">
               <div>
@@ -3123,6 +3596,7 @@ async function loadMyGigs() {
                 <i class="fa-solid fa-trash"></i> Delete Gig
               </button>
             </div>
+            
             ${imgCount > 0 ? `
               <div style="margin-top: .8rem; display: flex; gap: .5rem; overflow-x: auto; padding-bottom: .2rem">
                 ${(g.portfolio_urls || []).map(url => `
@@ -3133,6 +3607,7 @@ async function loadMyGigs() {
                 `).join('')}
               </div>
             ` : ''}
+            
           </div>
         </div>
       </div>`;
@@ -3148,11 +3623,13 @@ async function deleteGig(gigId) {
     toast('Gig Deleted', '', 'success');
     loadMyGigs();
     loadSpdOverview();
-  } catch(e) { toast('Delete Failed', e.message, 'error'); }
+  } catch(e) {
+    toast('Delete Failed', e.message, 'error');
+  }
 }
 
 // ====================================================
-//  SERVICE PROVIDER — Publish Gig
+//  SERVICE PROVIDER — Publish Gig (with Image Upload)
 // ====================================================
 async function publishServiceGig() {
   if (!currentUser) { showModal('auth-modal'); return; }
@@ -3165,10 +3642,14 @@ async function publishServiceGig() {
   const imgInput = document.getElementById('spd-images');
   const files    = imgInput?.files ? Array.from(imgInput.files).slice(0, 4) : [];
 
-  if (!title || !rate || !location || !desc || !wa) { toast('Please fill all fields', '', 'warn'); return; }
+  if (!title || !rate || !location || !desc || !wa) {
+    toast('Please fill all fields', '', 'warn'); return;
+  }
 
   try {
     toast('Publishing...', 'Uploading your gig', 'info', 3000);
+
+    // Upload portfolio images
     let imageUrls = [];
     for (const file of files) {
       const ext = file.name.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g,'');
@@ -3179,6 +3660,7 @@ async function publishServiceGig() {
         if (urlData?.publicUrl) imageUrls.push(urlData.publicUrl);
       }
     }
+
     const { error } = await db.from('service_gigs').insert({
       provider_id:   currentUser.id,
       title:         validateInput(title),
@@ -3192,14 +3674,19 @@ async function publishServiceGig() {
       created_at:    new Date().toISOString()
     });
     if (error) throw error;
+
     toast('Service Published! 🎉', 'Your gig is now live on BUYSELL', 'success');
-    ['spd-title','spd-rate','spd-location','spd-desc','spd-wa'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    ['spd-title','spd-rate','spd-location','spd-desc','spd-wa'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
     if (imgInput) imgInput.value = '';
     document.getElementById('spd-img-preview').innerHTML = '';
     const gigsEl = document.getElementById('spd-gigs');
     if (gigsEl) gigsEl.textContent = parseInt(gigsEl.textContent || '0') + 1;
     loadMyGigs();
-  } catch(e) { toast('Publish Failed', e.message, 'error'); }
+  } catch(e) {
+    toast('Publish Failed', e.message, 'error');
+  }
 }
 
 // ====================================================
@@ -3225,38 +3712,231 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ====================================================
-//  VIEW PROVIDER PROFILE
+//  VIEW PROVIDER PROFILE (Buyer Side)
 // ====================================================
 async function viewProviderProfile(providerId) {
   showModal('sp-profile-modal');
+
   try {
     const { data: provider } = await db.from('profiles').select('*').eq('id', providerId).single();
     const { data: gigs } = await db.from('service_gigs').select('*').eq('provider_id', providerId).eq('status', 'active').order('created_at', { ascending: false });
+
     const name = provider?.name || 'Service Pro';
     const wa = (provider?.whatsapp || '').replace(/\D/g, '');
     const allGigs = gigs || [];
     const mainGig = allGigs[0];
+
     document.getElementById('sp-p-name').textContent = name;
     document.getElementById('sp-p-category').innerHTML = '<i class="fa-solid fa-tag"></i> ' + (mainGig?.category || 'General');
     document.getElementById('sp-p-location').innerHTML = '<i class="fa-solid fa-map-pin"></i> ' + (mainGig?.location || 'Nigeria');
     document.getElementById('sp-p-gig-count').textContent = allGigs.length;
     document.getElementById('sp-p-bio').textContent = provider?.store_description || mainGig?.description || 'No bio available.';
+
+    // Services & Pricing
     const svcList = document.getElementById('sp-p-services-list');
     svcList.innerHTML = allGigs.length
       ? allGigs.map(g => `<div style="display:flex;align-items:center;justify-content:space-between;padding:.65rem .85rem;background:var(--cream);border-radius:10px;border:1px solid var(--border)"><div><div style="font-weight:600;font-size:.85rem">${escHtml(g.title)}</div><div style="font-size:.72rem;color:var(--text3)">${escHtml(g.category)}</div></div><div style="font-weight:800;color:var(--green);font-size:.95rem">\u20A6${(g.starting_rate||g.price||0).toLocaleString()}</div></div>`).join('')
       : '<p class="color-text3 text-sm">No services listed.</p>';
+
+    // Portfolio Gallery
     const allImages = allGigs.flatMap(g => g.portfolio_urls || []);
     const gallery = document.getElementById('sp-p-gallery');
     gallery.innerHTML = allImages.length
       ? allImages.map(url => `<img src="${url}" style="width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer;border-radius:6px" onclick="window.open('${url}','_blank')">`).join('')
       : '<p class="color-text3 text-sm" style="grid-column:1/-1;text-align:center;padding:1rem">No portfolio images yet.</p>';
+
+    // Reviews placeholder
     document.getElementById('sp-p-rating').textContent = '5.0';
     document.getElementById('sp-p-reviews-count').textContent = '0';
     document.getElementById('sp-p-reviews').innerHTML = '<p class="color-text3 text-sm">No reviews yet. Be the first to hire and review!</p>';
+
+    // WhatsApp CTA
     document.getElementById('sp-p-wa-btn').href = wa
       ? `https://wa.me/${wa}?text=Hi%20${encodeURIComponent(name)}%2C%20I%20found%20you%20on%20BUYSELL%20and%20I'd%20like%20to%20hire%20you.`
       : '#';
-  } catch(e) { console.error('Profile load error:', e); }
+
+    // Book button
+    const bookBtnContainer = document.getElementById('sp-p-book-btn');
+    if (bookBtnContainer && mainGig) {
+      bookBtnContainer.innerHTML = `<button class="btn btn-primary btn-full mt-3" onclick="bookService('${mainGig.id}','${providerId}')"><i class="fa-solid fa-calendar-check"></i> Book This Provider – from ₦${(mainGig.starting_rate||0).toLocaleString()}</button>`;
+    }
+  } catch(e) {
+    console.error('Profile load error:', e);
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — COMMISSION CHECK (same rules as sellers)
+// ====================================================
+async function checkServiceProviderCommission() {
+  if (!currentUser?.profile) return;
+  const p = currentUser.profile;
+  const role = p.role;
+  if (role !== 'service_provider') return;
+
+  const trialEnd = p.trial_end ? new Date(p.trial_end) : null;
+  const commPaid = p.commission_paid;
+
+  // Update SPD commission badge if it exists
+  const badge = document.getElementById('spd-comm-badge');
+  if (badge) {
+    if (commPaid) { badge.className='badge badge-green'; badge.textContent='✓ Active'; }
+    else if (trialEnd && trialEnd > new Date()) { badge.className='badge badge-gold'; badge.textContent=`Trial – ${Math.ceil((trialEnd-new Date())/86400000)}d left`; }
+    else { badge.className='badge badge-red'; badge.textContent='Suspended'; }
+  }
+
+  // Lock out if expired
+  if (!commPaid && trialEnd && trialEnd < new Date() && currentUser.email !== ADMIN_EMAIL) {
+    document.getElementById('suspended-modal').classList.add('open');
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — BOOKINGS (Provider Side)
+// ====================================================
+async function loadProviderBookings() {
+  if (!currentUser) return;
+  const container = document.getElementById('spd-bookings-list');
+  if (!container) return;
+  container.innerHTML = '<div class="skeleton-block" style="height:80px"></div>'.repeat(3);
+
+  try {
+    const { data: bookings } = await db.from('service_bookings')
+      .select('*, profiles!service_bookings_buyer_id_fkey(name, email, whatsapp), service_gigs(title)')
+      .eq('provider_id', currentUser.id)
+      .order('created_at', { ascending: false });
+
+    if (!bookings?.length) {
+      container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">No bookings yet. Share your services to get hired!</p></div>';
+      return;
+    }
+
+    const statusColors = {pending:'badge-gold',accepted:'badge-blue',in_progress:'badge-purple',completed:'badge-green',cancelled:'badge-red'};
+    container.innerHTML = bookings.map(b => {
+      const buyerName = b.profiles?.name || 'Buyer';
+      const buyerWa = (b.profiles?.whatsapp || '').replace(/\D/g,'');
+      const gigTitle = b.service_gigs?.title || 'Service';
+      return `
+      <div class="card card-pad mb-3" style="border-left:4px solid ${b.status==='completed'?'var(--green)':b.status==='cancelled'?'var(--red)':'var(--gold)'}">
+        <div class="flex justify-between items-start flex-wrap gap-2 mb-2">
+          <div>
+            <div class="font-bold text-sm">${escHtml(gigTitle)}</div>
+            <div class="text-xs color-text3"><i class="fa-solid fa-user"></i> ${escHtml(buyerName)} · ${fmtDate(b.created_at)}</div>
+            ${b.message ? `<div class="text-sm mt-1" style="color:var(--text2)">"${escHtml(b.message.substring(0,150))}"</div>` : ''}
+          </div>
+          <div class="text-right">
+            <div class="font-bold color-green">${fmtN(b.agreed_price || b.budget || 0)}</div>
+            <span class="badge ${statusColors[b.status]||'badge-gray'}">${(b.status||'pending').replace(/_/g,' ')}</span>
+          </div>
+        </div>
+        <div class="flex gap-2 flex-wrap mt-2">
+          ${b.status==='pending' ? `
+            <button onclick="updateBookingStatus('${b.id}','accepted')" class="btn btn-primary btn-sm"><i class="fa-solid fa-check"></i> Accept</button>
+            <button onclick="updateBookingStatus('${b.id}','cancelled')" class="btn btn-outline btn-sm">Decline</button>
+          ` : ''}
+          ${b.status==='accepted' ? `<button onclick="updateBookingStatus('${b.id}','in_progress')" class="btn btn-sm" style="background:#ede9fe;color:#6d28d9"><i class="fa-solid fa-play"></i> Start Work</button>` : ''}
+          ${b.status==='in_progress' ? `<button onclick="updateBookingStatus('${b.id}','completed')" class="btn btn-sm" style="background:#dcfce7;color:#15803d"><i class="fa-solid fa-check-double"></i> Mark Completed</button>` : ''}
+          ${buyerWa ? `<a href="https://wa.me/${buyerWa}" target="_blank" class="btn btn-outline btn-sm"><i class="fa-brands fa-whatsapp"></i> Chat</a>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Update badge count
+    const pendingCount = bookings.filter(b => b.status === 'pending').length;
+    const bookingsBadge = document.getElementById('spd-bookings-badge');
+    if (bookingsBadge) { bookingsBadge.textContent = pendingCount; bookingsBadge.classList.toggle('hidden', !pendingCount); }
+  } catch(e) {
+    console.error('loadProviderBookings:', e);
+    container.innerHTML = '<p class="color-text3 text-sm">Could not load bookings.</p>';
+  }
+}
+
+async function updateBookingStatus(bookingId, status) {
+  try {
+    const updates = { status };
+    if (status === 'completed') updates.completed_at = new Date().toISOString();
+    const { error } = await db.from('service_bookings').update(updates).eq('id', bookingId).eq('provider_id', currentUser.id);
+    if (error) throw error;
+    toast(`Booking ${status.replace(/_/g,' ')}!`, '', 'success');
+    loadProviderBookings();
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — EARNINGS
+// ====================================================
+async function loadProviderEarnings() {
+  if (!currentUser) return;
+  try {
+    const { data: bookings } = await db.from('service_bookings')
+      .select('agreed_price, budget, status, created_at')
+      .eq('provider_id', currentUser.id);
+    const completed = (bookings||[]).filter(b => b.status === 'completed');
+    const totalEarned = completed.reduce((s,b) => s + (b.agreed_price || b.budget || 0), 0);
+    const pendingJobs = (bookings||[]).filter(b => b.status === 'in_progress' || b.status === 'accepted');
+    const pendingEarnings = pendingJobs.reduce((s,b) => s + (b.agreed_price || b.budget || 0), 0);
+
+    const el = document.getElementById('spd-earnings-content');
+    if (!el) return;
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Total Earned</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--green)">${fmtN(totalEarned)}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Pending Jobs</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--purple)">${pendingJobs.length}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">In Pipeline</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--gold)">${fmtN(pendingEarnings)}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Completed Jobs</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--green)">${completed.length}</div>
+        </div>
+      </div>
+      <div class="card card-pad">
+        <h3 class="mb-3"><i class="fa-solid fa-clock-rotate-left"></i> Recent Completions</h3>
+        ${completed.length ? completed.slice(0,10).map(b => `
+          <div class="flex justify-between items-center py-2 border-b border-border">
+            <div class="text-sm">${fmtDate(b.created_at)}</div>
+            <div class="font-bold color-green">${fmtN(b.agreed_price || b.budget || 0)}</div>
+          </div>
+        `).join('') : '<p class="color-text3 text-sm">No completed jobs yet.</p>'}
+      </div>`;
+  } catch(e) { console.error('loadProviderEarnings:', e); }
+}
+
+// ====================================================
+//  BOOK SERVICE (Buyer Side)
+// ====================================================
+async function bookService(gigId, providerId) {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  const message = prompt('Describe what you need (optional):') || '';
+  const budget = prompt('Your budget (₦):');
+  if (!budget || isNaN(parseFloat(budget))) { toast('Please enter a valid budget', '', 'warn'); return; }
+
+  try {
+    const { error } = await db.from('service_bookings').insert({
+      service_id:   gigId,
+      buyer_id:     currentUser.id,
+      provider_id:  providerId,
+      message:      validateInput(message),
+      budget:       parseFloat(budget),
+      agreed_price: parseFloat(budget),
+      status:       'pending',
+      created_at:   new Date().toISOString()
+    });
+    if (error) throw error;
+    toast('Booking Sent! 📩', 'The service provider will review your request', 'success', 5000);
+    closeModal('sp-profile-modal');
+  } catch(e) {
+    toast('Booking Failed', e.message, 'error');
+  }
 }
 
 // ====================================================
@@ -3265,21 +3945,29 @@ async function viewProviderProfile(providerId) {
 function openHelpModal() { showModal('help-modal'); }
 
 // ====================================================
-//  MARKETPLACE ADVERTISING
+//  MARKETPLACE ADVERTISING (Sellers & Service Providers)
 // ====================================================
 async function previewAdMedia(input) {
   const file = input.files[0];
   if (!file) return;
+
   const previewContainer = document.getElementById('ad-media-preview-container');
   const previewEl = document.getElementById('ad-preview-el');
   previewContainer.classList.remove('hidden');
+
   const fileUrl = URL.createObjectURL(file);
   if (file.type.startsWith('video/')) {
+    // Validate duration
     const video = document.createElement('video');
     video.preload = 'metadata';
     video.onloadedmetadata = function() {
       window.URL.revokeObjectURL(video.src);
-      if (video.duration > 30) { toast('Video too long', 'Maximum length is 30 seconds.', 'error'); input.value = ''; previewContainer.classList.add('hidden'); return; }
+      if (video.duration > 30) {
+        toast('Video too long', 'Maximum length is 30 seconds.', 'error');
+        input.value = '';
+        previewContainer.classList.add('hidden');
+        return;
+      }
       previewEl.innerHTML = `<video src="${fileUrl}" controls style="width:100%;max-height:200px;border-radius:var(--radius-sm)"></video>`;
     }
     video.src = fileUrl;
@@ -3287,6 +3975,262 @@ async function previewAdMedia(input) {
     previewEl.innerHTML = `<img src="${fileUrl}" style="width:100%;max-height:200px;object-fit:contain;border-radius:var(--radius-sm)">`;
   }
 }
+
+async function initiateAdPayment() {
+  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) {
+    return toast('Access Denied', 'Only sellers and service providers can advertise', 'error');
+  }
+
+  const title = document.getElementById('ad-title').value.trim();
+  const desc = document.getElementById('ad-desc').value.trim();
+  const cta = document.getElementById('ad-cta-select').value;
+  const link = document.getElementById('ad-link').value.trim();
+  const fileInput = document.getElementById('ad-media-file');
+  const file = fileInput.files[0];
+
+  if (!title || !desc || !link || !file) {
+    return toast('Incomplete Form', 'Please fill all required fields and upload media', 'error');
+  }
+
+  // Pay ₦10,000 via Paystack
+  const adFee = 10000;
+  const btn = document.getElementById('ad-pay-btn');
+  btn.innerHTML = '<span class="spinner"></span> Processing...';
+  btn.disabled = true;
+
+  try {
+    const { data: profile } = await db.from('profiles').select('email').eq('id', user.id).single();
+    
+    let handler = PaystackPop.setup({
+      key: 'pk_test_b8e5c2cf1d5a7d72856f6ba3a7b6cf7169bed9b7', // Using test key for dev
+      email: profile?.email || user.email || 'advertiser@buysell.ng',
+      amount: adFee * 100, // kobo
+      currency: 'NGN',
+      ref: 'AD_' + Math.floor(Math.random() * 1000000000 + 1),
+      callback: async function(response) {
+        toast('Payment Successful', 'Uploading advertisement...', 'success');
+        
+        // Use existing submitProduct logic for file upload pattern
+        const ext = file.name.split('.').pop();
+        const path = `ads/${user.id}/${Date.now()}.${ext}`;
+        const { data: uploadData, error: uploadErr } = await supabase.storage.from('products').upload(path, file);
+        if (uploadErr) throw uploadErr;
+        
+        const { data: { publicUrl } } = supabase.storage.from('products').getPublicUrl(path);
+
+        const adData = {
+          advertiser_id: user.id,
+          advertiser_type: user.user_type,
+          title: title,
+          description: desc,
+          media_url: publicUrl,
+          media_type: file.type.startsWith('video/') ? 'video' : 'image',
+          cta_text: cta,
+          cta_link: link,
+          payment_ref: response.reference,
+          payment_amount: adFee,
+          status: 'active',
+          expires_at: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString() // 3 weeks
+        };
+
+        const { error: adErr } = await db.from('advertisements').insert([adData]);
+        if (adErr) throw adErr;
+
+        toast('Success', 'Your advertisement is now live!', 'success');
+        document.getElementById('ad-title').value = '';
+        document.getElementById('ad-desc').value = '';
+        document.getElementById('ad-media-file').value = '';
+        document.getElementById('ad-media-preview-container').classList.add('hidden');
+        loadActiveAds();
+      },
+      onClose: function() {
+        toast('Cancelled', 'Payment was cancelled', 'warn');
+        btn.innerHTML = '<i class="fa-solid fa-credit-card"></i> Pay & Publish Ad';
+        btn.disabled = false;
+      }
+    });
+    handler.openIframe();
+  } catch(e) {
+    console.error('Ad payment err:', e);
+    toast('Error', 'Failed to process ad payment', 'error');
+    btn.innerHTML = '<i class="fa-solid fa-credit-card"></i> Pay & Publish Ad';
+    btn.disabled = false;
+  }
+}
+
+async function loadActiveAds() {
+  if (!user) return;
+  const tbody = document.getElementById('ad-table-body');
+  try {
+    const { data: ads, error } = await db.from('advertisements').select('*').eq('advertiser_id', user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+
+    let totalViews = 0, totalClicks = 0;
+    
+    if (!ads || ads.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text3)">No active ads yet</td></tr>';
+    } else {
+      tbody.innerHTML = ads.map(a => {
+        totalViews += a.views || 0;
+        totalClicks += a.clicks || 0;
+        const mediaTag = a.media_type === 'video' 
+          ? `<video src="${a.media_url}" style="width:40px;height:40px;object-fit:cover;border-radius:4px"></video>` 
+          : `<img src="${a.media_url}" style="width:40px;height:40px;object-fit:cover;border-radius:4px">`;
+        const expDate = new Date(a.expires_at).toLocaleDateString();
+        return `<tr>
+          <td>${mediaTag}</td>
+          <td style="font-weight:600">${escHtml(a.title)}</td>
+          <td>${a.views || 0}</td>
+          <td>${a.clicks || 0}</td>
+          <td><span class="badge ${a.status==='active'?'badge-green':a.status==='expired'?'badge-red':'badge-gold'}">${a.status}</span></td>
+          <td>${expDate}</td>
+        </tr>`;
+      }).join('');
+    }
+    
+    document.getElementById('ad-active-count').textContent = ads?.filter(a=>a.status==='active').length || 0;
+    document.getElementById('ad-total-views').textContent = totalViews;
+    document.getElementById('ad-total-clicks').textContent = totalClicks;
+
+  } catch(e) {
+    console.error('Failed to load ads:', e);
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:red">Failed to load ads</td></tr>';
+  }
+}
+
+// Buyer side rotating popup logic
+let activeSystemAds = [];
+let adPopupInterval = null;
+let currentAdIndex = 0;
+let adSkipTimer = 5;
+let adSkipInterval = null;
+
+async function fetchSystemAds() {
+  try {
+    const { data: ads } = await db.from('advertisements')
+      .select('*')
+      .eq('status', 'active')
+      .gt('expires_at', new Date().toISOString())
+      .limit(5); // Show max 5 rotating ads
+      
+    if (ads && ads.length > 0) {
+      activeSystemAds = ads;
+      // Randomize starting point or shuffle
+      activeSystemAds.sort(() => 0.5 - Math.random());
+      
+      // Delay to not immediately annoy user
+      setTimeout(showAdPopup, 10000); // show 10s after load
+    }
+  } catch(e) { console.error('Fetch ads error', e); }
+}
+
+function showAdPopup() {
+  if (activeSystemAds.length === 0 || sessionStorage.getItem('ads_seen_session')) return;
+  
+  const popup = document.getElementById('ad-popup-overlay');
+  popup.classList.remove('hidden');
+  renderCurrentAd();
+}
+
+function renderCurrentAd() {
+  if (activeSystemAds.length === 0) return;
+  const ad = activeSystemAds[currentAdIndex];
+  
+  document.getElementById('ad-counter').textContent = `${currentAdIndex + 1}/${activeSystemAds.length}`;
+  
+  const contentEl = document.getElementById('ad-popup-content');
+  if (ad.media_type === 'video') {
+    contentEl.innerHTML = `<video id="ad-video-el" src="${ad.media_url}" style="width:100%;height:100%;object-fit:cover" autoplay loop muted playsinline></video>
+                           <div class="ad-popup-info" style="pointer-events:none">
+                             <h2>${escHtml(ad.title)}</h2>
+                             <p>${escHtml(ad.description)}</p>
+                           </div>`;
+    // ensure it plays
+    setTimeout(() => {
+      const v = document.getElementById('ad-video-el');
+      if(v) v.play().catch(e=>console.log("Autoplay prevented"));
+    }, 100);
+  } else {
+    contentEl.innerHTML = `<img src="${ad.media_url}" style="width:100%;height:100%;object-fit:cover">
+                           <div class="ad-popup-info" style="pointer-events:none">
+                             <h2>${escHtml(ad.title)}</h2>
+                             <p>${escHtml(ad.description)}</p>
+                           </div>`;
+  }
+  
+  document.getElementById('ad-cta-btn').href = ad.cta_link || '#';
+  document.getElementById('ad-cta-text').textContent = ad.cta_text || 'Learn More';
+  
+  // Register View
+  callEdge('/update-ad-stats', { adId: ad.id, type: 'view' }).catch(e=>console.error(e));
+  
+  // setup dots
+  const dotsContainer = document.getElementById('ad-popup-dots');
+  dotsContainer.innerHTML = activeSystemAds.map((_, i) => `<div class="ad-popup-dot ${i === currentAdIndex ? 'active' : ''}"></div>`).join('');
+  
+  // reset timer
+  adSkipTimer = 5;
+  const skipBtn = document.getElementById('ad-skip-btn');
+  skipBtn.disabled = true;
+  document.getElementById('ad-skip-timer').textContent = adSkipTimer;
+  
+  clearInterval(adSkipInterval);
+  adSkipInterval = setInterval(() => {
+    adSkipTimer--;
+    if (adSkipTimer <= 0) {
+      clearInterval(adSkipInterval);
+      skipBtn.disabled = false;
+      document.getElementById('ad-skip-timer').textContent = '';
+      skipBtn.innerHTML = 'Skip <i class="fa-solid fa-step-forward"></i>';
+    } else {
+      document.getElementById('ad-skip-timer').textContent = adSkipTimer;
+    }
+  }, 1000);
+  
+  // Setup progress animation for 10s total
+  const progress = document.getElementById('ad-progress');
+  progress.style.transition = 'none';
+  progress.style.width = '0%';
+  setTimeout(() => {
+    progress.style.transition = 'width 10s linear';
+    progress.style.width = '100%';
+  }, 50);
+  
+  clearTimeout(adPopupInterval);
+  adPopupInterval = setTimeout(nextAd, 10000);
+  
+  // Track clicks
+  document.getElementById('ad-cta-btn').onclick = () => {
+    callEdge('/update-ad-stats', { adId: ad.id, type: 'click' }).catch(e=>console.error(e));
+  };
+}
+
+function nextAd() {
+  currentAdIndex = (currentAdIndex + 1) % activeSystemAds.length;
+  // If we cycled through all of them, maybe just close it
+  if (currentAdIndex === 0) {
+    closeAdPopup();
+    return;
+  }
+  renderCurrentAd();
+}
+
+function skipAd() {
+  nextAd();
+}
+
+function closeAdPopup() {
+  document.getElementById('ad-popup-overlay').classList.add('hidden');
+  clearTimeout(adPopupInterval);
+  clearInterval(adSkipInterval);
+  sessionStorage.setItem('ads_seen_session', 'true');
+}
+
+// Call fetch on load for buyers
+if (!user || user.user_type === 'buyer') {
+  document.addEventListener('DOMContentLoaded', fetchSystemAds);
+}
+
 
 // ====================================================
 //  SERVICE PROVIDER IMAGE DELETION
@@ -3297,16 +4241,24 @@ async function deletePortfolioImage(url, gigId, event) {
   const btn = event.currentTarget;
   const originalHtml = btn.innerHTML;
   btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+  
   try {
     const { data: gigData, error: fetchErr } = await db.from('service_gigs').select('*').eq('id', gigId).single();
     if (fetchErr) throw fetchErr;
     if (!gigData) return;
+    
     let urls = gigData.portfolio_urls || [];
-    urls = urls.filter(u => u !== url);
+    urls = urls.filter(u => u !== url); // remove the specific url
+    
+    // Update db
     const { error: updateErr } = await db.from('service_gigs').update({ portfolio_urls: urls }).eq('id', gigId);
     if(updateErr) throw updateErr;
+    
     toast('Deleted', 'Image removed from portfolio', 'success');
+    
+    // Rerender UI
     loadMyGigs();
+
   } catch(e) {
     console.error('Delete image err:', e);
     toast('Error', 'Failed to delete image', 'error');
@@ -3314,22 +4266,29 @@ async function deletePortfolioImage(url, gigId, event) {
   }
 }
 
+
 // ====================================================
 //  AFFILIATE SYSTEMS
 // ====================================================
 async function generateAndLoadAffiliateData() {
-  if (!currentUser) return;
+  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) return;
+  
   const linkInput = document.getElementById('referral-link');
-  if (linkInput) linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${currentUser.id}`;
+  linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${user.id}`;
+  
   try {
-    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', currentUser.id).order('created_at', { ascending: false });
+    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', user.id).order('created_at', { ascending: false });
     if(error) throw error;
+    
     const total = earnings?.filter(e=>e.status==='paid').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
     const pending = earnings?.filter(e=>e.status==='pending').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
+    
     document.getElementById('aff-total').textContent = `₦${total.toLocaleString()}`;
     document.getElementById('aff-pending').textContent = `₦${pending.toLocaleString()}`;
-    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', currentUser.id);
+    // Clicks/conversions would normally come from a referrals/clicks table. Assuming conversion = total referrals made
+    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', user.id);
     document.getElementById('aff-conversions').textContent = refCount || 0;
+    
     const tbody = document.getElementById('aff-table-body');
     if(!earnings || earnings.length === 0) {
       tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)">No earnings yet</td></tr>';
@@ -3344,16 +4303,33 @@ async function generateAndLoadAffiliateData() {
         </tr>
       `).join('');
     }
-  } catch(e) { console.error('Affiliate load error', e); }
+  } catch(e) {
+    console.error('Affiliate load error', e);
+  }
+}
+
+function copyReferralLink() {
+  const linkInput = document.getElementById('referral-link');
+  if(!linkInput || !linkInput.value) return;
+  navigator.clipboard.writeText(linkInput.value).then(()=>{
+    toast('Copied', 'Referral link copied to clipboard', 'success');
+  }).catch(()=>{
+    linkInput.select();
+    document.execCommand('copy');
+    toast('Copied', 'Referral link copied to clipboard', 'success');
+  });
 }
 
 // Intercept showDash to trigger loads
 const _origShowDash = showDash;
 showDash = function(section) {
   _origShowDash(section);
+  if (section === 'advertise') loadActiveAds();
   if (section === 'affiliate') generateAndLoadAffiliateData();
 }
 
+// Track referrals in DB on signup
+// Need to add referral ref processing in app.js
 window.addEventListener('DOMContentLoaded', () => {
   const urlParams = new URLSearchParams(window.location.search);
   const ref = urlParams.get('ref');
@@ -3361,3 +4337,803 @@ window.addEventListener('DOMContentLoaded', () => {
     sessionStorage.setItem('referred_by', ref);
   }
 });
+
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 1: WISHLIST / SAVE FOR LATER
+// ════════════════════════════════════════════════════════════
+let wishlist = JSON.parse(localStorage.getItem('bs_wishlist') || '[]');
+
+function toggleWishlist(productId) {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  const idx = wishlist.indexOf(productId);
+  if (idx > -1) {
+    wishlist.splice(idx, 1);
+    db.from('wishlists').delete().eq('user_id', currentUser.id).eq('product_id', productId).catch(()=>{});
+    toast('Removed from Wishlist', '', 'info');
+  } else {
+    wishlist.push(productId);
+    db.from('wishlists').insert({ user_id: currentUser.id, product_id: productId }).catch(()=>{});
+    toast('Added to Wishlist ❤️', 'You\'ll see it in your saved items', 'success');
+  }
+  localStorage.setItem('bs_wishlist', JSON.stringify(wishlist));
+  updateWishlistBadge();
+  // Re-render product cards to update heart icons
+  if (typeof renderProducts === 'function' && filteredProducts) renderProducts(filteredProducts);
+}
+
+function isWishlisted(productId) { return wishlist.includes(productId); }
+
+function updateWishlistBadge() {
+  const badge = document.getElementById('wishlist-count');
+  if (badge) { badge.textContent = wishlist.length; badge.classList.toggle('hidden', !wishlist.length); }
+}
+
+async function loadWishlist() {
+  if (!currentUser) return;
+  const { data } = await db.from('wishlists').select('product_id').eq('user_id', currentUser.id);
+  if (data) { wishlist = data.map(w => w.product_id); localStorage.setItem('bs_wishlist', JSON.stringify(wishlist)); }
+  updateWishlistBadge();
+}
+
+async function showWishlistModal() {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  showModal('wishlist-modal');
+  const container = document.getElementById('wishlist-items');
+  if (!container) return;
+  if (!wishlist.length) {
+    container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-heart" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">Your wishlist is empty. Browse products and tap ❤️ to save!</p></div>';
+    return;
+  }
+  container.innerHTML = '<div class="skeleton" style="height:80px"></div>'.repeat(3);
+  const { data: prods } = await db.from('products').select('*').in('id', wishlist);
+  if (!prods?.length) { container.innerHTML = '<p class="color-text3 text-sm">No products found.</p>'; return; }
+  container.innerHTML = prods.map(p => `
+    <div class="card mb-2" style="display:flex;gap:.75rem;padding:.75rem;align-items:center">
+      <img src="${(p.images&&p.images[0])||''}" style="width:56px;height:56px;object-fit:cover;border-radius:8px;flex-shrink:0" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22><rect fill=%22%23f0f0f0%22 width=%221%22 height=%221%22/></svg>'">
+      <div style="flex:1;min-width:0">
+        <div class="font-bold text-sm" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
+        <div class="font-bold color-green text-sm">${fmtN(p.price)}</div>
+      </div>
+      <div style="display:flex;gap:.4rem;flex-shrink:0">
+        <button class="btn btn-primary btn-sm" onclick="closeModal('wishlist-modal');openProduct('${p.id}')"><i class="fa-solid fa-eye"></i></button>
+        <button class="btn btn-sm" style="background:#fee2e2;color:var(--red)" onclick="toggleWishlist('${p.id}');showWishlistModal()"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 2: PRODUCT COMPARISON
+// ════════════════════════════════════════════════════════════
+let compareList = [];
+
+function toggleCompare(productId) {
+  const idx = compareList.indexOf(productId);
+  if (idx > -1) {
+    compareList.splice(idx, 1);
+    toast('Removed from comparison', '', 'info');
+  } else {
+    if (compareList.length >= 3) { toast('Max 3 products', 'Remove one first', 'warn'); return; }
+    compareList.push(productId);
+    toast('Added to Compare', `${compareList.length}/3 selected`, 'success');
+  }
+  updateCompareBadge();
+}
+
+function updateCompareBadge() {
+  const badge = document.getElementById('compare-count');
+  if (badge) { badge.textContent = compareList.length; badge.classList.toggle('hidden', !compareList.length); }
+  const bar = document.getElementById('compare-bar');
+  if (bar) bar.classList.toggle('hidden', compareList.length < 2);
+}
+
+async function showCompareModal() {
+  if (compareList.length < 2) { toast('Select at least 2 products to compare', '', 'warn'); return; }
+  showModal('compare-modal');
+  const container = document.getElementById('compare-content');
+  if (!container) return;
+  const { data: prods } = await db.from('products').select('*').in('id', compareList);
+  if (!prods?.length) return;
+
+  const cols = prods.length;
+  container.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead><tr style="background:var(--green-xlt)">
+        <th style="padding:.6rem;text-align:left;border:1px solid var(--border)">Feature</th>
+        ${prods.map(p => `<th style="padding:.6rem;text-align:center;border:1px solid var(--border);max-width:160px">
+          <img src="${(p.images&&p.images[0])||''}" style="width:50px;height:50px;object-fit:cover;border-radius:6px;display:block;margin:0 auto .4rem" onerror="this.style.display='none'">
+          <div class="font-bold" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
+        </th>`).join('')}
+      </tr></thead>
+      <tbody>
+        <tr><td style="padding:.5rem;border:1px solid var(--border);font-weight:600">Price</td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);text-align:center;font-weight:700;color:var(--green)">${fmtN(p.price)}</td>`).join('')}</tr>
+        <tr><td style="padding:.5rem;border:1px solid var(--border);font-weight:600">Category</td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);text-align:center">${escHtml(p.category||'—')}</td>`).join('')}</tr>
+        <tr><td style="padding:.5rem;border:1px solid var(--border);font-weight:600">Condition</td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);text-align:center">${escHtml(p.condition||'—')}</td>`).join('')}</tr>
+        <tr><td style="padding:.5rem;border:1px solid var(--border);font-weight:600">Rating</td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);text-align:center">⭐ ${(p.avg_rating||0).toFixed(1)}</td>`).join('')}</tr>
+        <tr><td style="padding:.5rem;border:1px solid var(--border);font-weight:600">Description</td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);font-size:.75rem;line-height:1.4">${escHtml((p.description||'').substring(0,120))}...</td>`).join('')}</tr>
+        <tr><td style="padding:.5rem;border:1px solid var(--border)"></td>
+          ${prods.map(p => `<td style="padding:.5rem;border:1px solid var(--border);text-align:center"><button class="btn btn-primary btn-sm" onclick="closeModal('compare-modal');openProduct('${p.id}')">View</button></td>`).join('')}</tr>
+      </tbody>
+    </table>`;
+}
+
+function clearCompare() { compareList = []; updateCompareBadge(); toast('Comparison cleared', '', 'info'); }
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 3: SELLER TIERS & BADGES
+// ════════════════════════════════════════════════════════════
+function getSellerTier(salesCount, avgRating) {
+  if (salesCount >= 100 && avgRating >= 4.5) return { tier: 'verified', label: '✅ Verified Seller', color: '#16a34a', bg: '#dcfce7' };
+  if (salesCount >= 50 && avgRating >= 4.0)  return { tier: 'gold', label: '🥇 Gold Seller', color: '#ca8a04', bg: '#fef9c3' };
+  if (salesCount >= 20 && avgRating >= 3.5)  return { tier: 'silver', label: '🥈 Silver Seller', color: '#64748b', bg: '#f1f5f9' };
+  return { tier: 'bronze', label: '🥉 New Seller', color: '#a16207', bg: '#fefce8' };
+}
+
+function renderSellerBadge(salesCount, avgRating) {
+  const t = getSellerTier(salesCount || 0, avgRating || 0);
+  return `<span style="display:inline-flex;align-items:center;gap:.25rem;font-size:.65rem;font-weight:700;padding:.2rem .5rem;border-radius:6px;background:${t.bg};color:${t.color}">${t.label}</span>`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 4: COUPON / DISCOUNT SYSTEM
+// ════════════════════════════════════════════════════════════
+let appliedCoupon = null;
+
+async function applyCoupon() {
+  const codeInput = document.getElementById('coupon-code');
+  const code = codeInput?.value.trim().toUpperCase();
+  if (!code) { toast('Enter a coupon code', '', 'warn'); return; }
+
+  try {
+    const { data: coupons } = await db.from('coupons')
+      .select('*')
+      .eq('code', code)
+      .eq('is_active', true)
+      .gte('expires_at', new Date().toISOString())
+      .limit(1);
+
+    const coupon = coupons?.[0];
+    if (!coupon) { toast('Invalid or expired coupon', '', 'error'); return; }
+    if (coupon.used_count >= coupon.max_uses) { toast('Coupon limit reached', '', 'error'); return; }
+
+    const cartTotal = cart.reduce((s, c) => s + c.price * (c.qty || 1), 0);
+    if (cartTotal < (coupon.min_order || 0)) {
+      toast(`Min order ₦${(coupon.min_order||0).toLocaleString()}`, 'Add more items', 'warn');
+      return;
+    }
+
+    appliedCoupon = coupon;
+    let discount = 0;
+    if (coupon.discount_type === 'percent') {
+      discount = cartTotal * (coupon.discount_value / 100);
+    } else {
+      discount = coupon.discount_value;
+    }
+    discount = Math.min(discount, cartTotal);
+
+    const discountEl = document.getElementById('co-discount');
+    const discountRow = document.getElementById('co-discount-row');
+    if (discountEl) discountEl.textContent = '-' + fmtN(discount);
+    if (discountRow) discountRow.classList.remove('hidden');
+
+    const totalEl = document.getElementById('co-total');
+    if (totalEl) totalEl.textContent = fmtN(cartTotal - discount);
+
+    toast(`Coupon Applied! 🎉`, `${coupon.discount_type === 'percent' ? coupon.discount_value + '%' : fmtN(coupon.discount_value)} off`, 'success');
+    codeInput.value = '';
+    codeInput.disabled = true;
+  } catch(e) {
+    toast('Coupon Error', e.message, 'error');
+  }
+}
+
+function removeCoupon() {
+  appliedCoupon = null;
+  const discountRow = document.getElementById('co-discount-row');
+  if (discountRow) discountRow.classList.add('hidden');
+  const codeInput = document.getElementById('coupon-code');
+  if (codeInput) { codeInput.disabled = false; codeInput.value = ''; }
+  // Recalculate total
+  const cartTotal = cart.reduce((s, c) => s + c.price * (c.qty || 1), 0);
+  const totalEl = document.getElementById('co-total');
+  if (totalEl) totalEl.textContent = fmtN(cartTotal);
+  toast('Coupon removed', '', 'info');
+}
+
+// Seller: Create coupon
+async function createCoupon() {
+  if (!currentUser) return;
+  const code = document.getElementById('coupon-new-code')?.value.trim().toUpperCase();
+  const type = document.getElementById('coupon-type')?.value || 'percent';
+  const value = parseFloat(document.getElementById('coupon-value')?.value) || 0;
+  const minOrder = parseFloat(document.getElementById('coupon-min')?.value) || 0;
+  const maxUses = parseInt(document.getElementById('coupon-max')?.value) || 100;
+  const daysValid = parseInt(document.getElementById('coupon-days')?.value) || 30;
+
+  if (!code || !value) { toast('Fill code and value', '', 'warn'); return; }
+
+  try {
+    const { error } = await db.from('coupons').insert({
+      seller_id: currentUser.id,
+      code,
+      discount_type: type,
+      discount_value: value,
+      min_order: minOrder,
+      max_uses: maxUses,
+      expires_at: new Date(Date.now() + daysValid * 86400000).toISOString(),
+      is_active: true
+    });
+    if (error) throw error;
+    toast('Coupon Created! 🎫', `Code: ${code}`, 'success');
+    loadSellerCoupons();
+    ['coupon-new-code','coupon-value','coupon-min','coupon-max','coupon-days'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function loadSellerCoupons() {
+  if (!currentUser) return;
+  const container = document.getElementById('seller-coupons-list');
+  if (!container) return;
+  const { data } = await db.from('coupons').select('*').eq('seller_id', currentUser.id).order('created_at', { ascending: false });
+  if (!data?.length) { container.innerHTML = '<p class="color-text3 text-sm">No coupons yet.</p>'; return; }
+  container.innerHTML = data.map(c => {
+    const expired = c.expires_at && new Date(c.expires_at) < new Date();
+    return `<div class="card card-pad mb-2" style="border-left:3px solid ${expired?'var(--red)':'var(--green)'}">
+      <div class="flex justify-between items-center">
+        <div>
+          <span class="font-bold">${escHtml(c.code)}</span>
+          <span class="badge ${expired?'badge-red':'badge-green'} ml-2">${expired?'Expired':'Active'}</span>
+        </div>
+        <span class="font-bold color-green">${c.discount_type==='percent'?c.discount_value+'%':fmtN(c.discount_value)} off</span>
+      </div>
+      <div class="text-xs color-text3 mt-1">Used ${c.used_count}/${c.max_uses} · Min order ${fmtN(c.min_order)} · Expires ${fmtDate(c.expires_at)}</div>
+    </div>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 5: FLASH SALES / DEAL OF THE DAY
+// ════════════════════════════════════════════════════════════
+let activeFlashSales = [];
+
+async function loadFlashSales() {
+  const now = new Date().toISOString();
+  const { data } = await db.from('flash_sales')
+    .select('*, products(*)')
+    .eq('is_active', true)
+    .lte('starts_at', now)
+    .gte('ends_at', now)
+    .order('ends_at', { ascending: true })
+    .limit(10);
+  activeFlashSales = data || [];
+  renderFlashSales();
+}
+
+function renderFlashSales() {
+  const container = document.getElementById('flash-sales-container');
+  if (!container) return;
+  if (!activeFlashSales.length) { container.classList.add('hidden'); return; }
+  container.classList.remove('hidden');
+
+  const listEl = document.getElementById('flash-sales-list');
+  if (!listEl) return;
+  listEl.innerHTML = activeFlashSales.map(fs => {
+    const p = fs.products;
+    if (!p) return '';
+    const discount = Math.round((1 - fs.sale_price / fs.original_price) * 100);
+    const endsAt = new Date(fs.ends_at);
+    return `
+    <div class="flash-card" onclick="openProduct('${p.id}')" style="min-width:160px;max-width:180px;cursor:pointer;flex-shrink:0;background:#fff;border-radius:12px;overflow:hidden;border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,.06)">
+      <div style="position:relative">
+        <img src="${(p.images&&p.images[0])||''}" style="width:100%;height:120px;object-fit:cover" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22><rect fill=%22%23f0f0f0%22 width=%221%22 height=%221%22/></svg>'">
+        <span style="position:absolute;top:6px;left:6px;background:#ef4444;color:#fff;font-size:.65rem;font-weight:700;padding:.2rem .45rem;border-radius:4px">-${discount}%</span>
+      </div>
+      <div style="padding:.55rem">
+        <div class="text-sm font-bold" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
+        <div style="display:flex;align-items:center;gap:.4rem;margin-top:.25rem">
+          <span class="font-bold color-green" style="font-size:.9rem">${fmtN(fs.sale_price)}</span>
+          <span style="text-decoration:line-through;color:var(--text3);font-size:.72rem">${fmtN(fs.original_price)}</span>
+        </div>
+        <div class="flash-timer text-xs" style="color:#ef4444;font-weight:600;margin-top:.3rem" data-ends="${fs.ends_at}"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Start countdown timers
+  updateFlashTimers();
+}
+
+function updateFlashTimers() {
+  document.querySelectorAll('.flash-timer').forEach(el => {
+    const ends = new Date(el.dataset.ends);
+    const diff = ends - new Date();
+    if (diff <= 0) { el.textContent = 'ENDED'; return; }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.textContent = `⏰ ${h}h ${m}m ${s}s left`;
+  });
+}
+setInterval(updateFlashTimers, 1000);
+
+// Seller: create flash sale
+async function createFlashSale() {
+  if (!currentUser) return;
+  const productId = document.getElementById('flash-product')?.value;
+  const salePrice = parseFloat(document.getElementById('flash-price')?.value) || 0;
+  const hours = parseInt(document.getElementById('flash-hours')?.value) || 24;
+  if (!productId || !salePrice) { toast('Select product and set sale price', '', 'warn'); return; }
+
+  // Get original price
+  const { data: prod } = await db.from('products').select('price').eq('id', productId).single();
+  if (!prod) { toast('Product not found', '', 'error'); return; }
+
+  try {
+    const { error } = await db.from('flash_sales').insert({
+      product_id: productId,
+      seller_id: currentUser.id,
+      original_price: prod.price,
+      sale_price: salePrice,
+      starts_at: new Date().toISOString(),
+      ends_at: new Date(Date.now() + hours * 3600000).toISOString(),
+      is_active: true
+    });
+    if (error) throw error;
+    toast('Flash Sale Live! ⚡', `Ends in ${hours} hours`, 'success');
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 6: IN-APP MESSAGING
+// ════════════════════════════════════════════════════════════
+let currentChatPartner = null;
+let msgInterval = null;
+
+async function openMessageModal(partnerId, partnerName, productId=null) {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  currentChatPartner = { id: partnerId, name: partnerName, productId };
+  showModal('message-modal');
+  document.getElementById('msg-partner-name').textContent = partnerName || 'User';
+  await loadConversation(partnerId);
+  // Poll for new messages
+  if (msgInterval) clearInterval(msgInterval);
+  msgInterval = setInterval(() => loadConversation(partnerId, true), 5000);
+}
+
+async function loadConversation(partnerId, silent=false) {
+  const container = document.getElementById('msg-conversation');
+  if (!container) return;
+  if (!silent) container.innerHTML = '<div class="skeleton" style="height:40px"></div>'.repeat(3);
+
+  const { data: msgs } = await db.from('messages')
+    .select('*')
+    .or(`and(sender_id.eq.${currentUser.id},receiver_id.eq.${partnerId}),and(sender_id.eq.${partnerId},receiver_id.eq.${currentUser.id})`)
+    .order('created_at', { ascending: true })
+    .limit(100);
+
+  if (!msgs?.length && !silent) {
+    container.innerHTML = '<p class="color-text3 text-sm text-center" style="padding:2rem">No messages yet. Start the conversation!</p>';
+    return;
+  }
+  if (!msgs?.length) return;
+
+  container.innerHTML = msgs.map(m => {
+    const isMine = m.sender_id === currentUser.id;
+    return `<div style="display:flex;${isMine?'flex-direction:row-reverse':'flex-direction:row'};gap:.3rem;margin-bottom:.4rem">
+      <div style="max-width:75%;padding:.45rem .7rem;border-radius:12px;font-size:.8rem;line-height:1.4;${isMine?'background:var(--green);color:#fff;border-bottom-right-radius:4px':'background:#fff;border:1px solid var(--border);border-bottom-left-radius:4px'}">
+        ${escHtml(m.content)}
+        <div style="font-size:.6rem;opacity:.6;margin-top:.15rem;text-align:${isMine?'right':'left'}">${new Date(m.created_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div>
+      </div>
+    </div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+
+  // Mark unread as read
+  const unreadIds = msgs.filter(m => m.receiver_id === currentUser.id && !m.is_read).map(m => m.id);
+  if (unreadIds.length) db.from('messages').update({ is_read: true }).in('id', unreadIds).catch(()=>{});
+}
+
+async function sendMessage() {
+  if (!currentUser || !currentChatPartner) return;
+  const input = document.getElementById('msg-input');
+  const text = input?.value.trim();
+  if (!text) return;
+  input.value = '';
+
+  await db.from('messages').insert({
+    sender_id: currentUser.id,
+    receiver_id: currentChatPartner.id,
+    product_id: currentChatPartner.productId || null,
+    content: validateInput(text)
+  });
+  loadConversation(currentChatPartner.id);
+}
+
+async function loadInboxCount() {
+  if (!currentUser) return;
+  const { count } = await db.from('messages').select('id', { count: 'exact', head: true }).eq('receiver_id', currentUser.id).eq('is_read', false);
+  const badge = document.getElementById('inbox-count');
+  if (badge) { badge.textContent = count || 0; badge.classList.toggle('hidden', !count); }
+}
+
+async function showInbox() {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  showModal('inbox-modal');
+  const container = document.getElementById('inbox-list');
+  if (!container) return;
+  container.innerHTML = '<div class="skeleton" style="height:60px"></div>'.repeat(3);
+
+  // Get unique conversations
+  const { data: msgs } = await db.from('messages')
+    .select('*, profiles!messages_sender_id_fkey(name)')
+    .or(`sender_id.eq.${currentUser.id},receiver_id.eq.${currentUser.id}`)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  if (!msgs?.length) {
+    container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-envelope" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">No messages yet.</p></div>';
+    return;
+  }
+
+  // Group by conversation partner
+  const convos = {};
+  msgs.forEach(m => {
+    const partnerId = m.sender_id === currentUser.id ? m.receiver_id : m.sender_id;
+    if (!convos[partnerId]) convos[partnerId] = { partnerId, messages: [], unread: 0 };
+    convos[partnerId].messages.push(m);
+    if (m.receiver_id === currentUser.id && !m.is_read) convos[partnerId].unread++;
+  });
+
+  // Get partner names
+  const partnerIds = Object.keys(convos);
+  const { data: profiles } = await db.from('profiles').select('id, name').in('id', partnerIds);
+  const nameMap = {};
+  (profiles||[]).forEach(p => nameMap[p.id] = p.name);
+
+  container.innerHTML = Object.values(convos).map(c => {
+    const last = c.messages[0];
+    const name = nameMap[c.partnerId] || 'User';
+    return `<div class="card card-pad mb-2" style="cursor:pointer;${c.unread?'border-left:3px solid var(--green)':''}" onclick="closeModal('inbox-modal');openMessageModal('${c.partnerId}','${escAttr(name)}')">
+      <div class="flex justify-between items-center">
+        <div class="font-bold text-sm">${escHtml(name)}</div>
+        <div class="text-xs color-text3">${fmtDate(last.created_at)}</div>
+      </div>
+      <div class="text-xs color-text3 mt-1" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(last.content.substring(0,60))}</div>
+      ${c.unread ? `<span class="badge badge-green mt-1">${c.unread} new</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 7: SERVICE PROVIDER REVIEWS
+// ════════════════════════════════════════════════════════════
+let svcReviewRating = 0;
+
+function openServiceReview(bookingId, providerName) {
+  showModal('service-review-modal');
+  document.getElementById('svc-review-provider').textContent = providerName;
+  document.getElementById('svc-review-booking-id').value = bookingId;
+  svcReviewRating = 0;
+  document.querySelectorAll('#svc-star-row .star-btn').forEach(b => b.classList.remove('active'));
+}
+
+function setSvcRating(val) {
+  svcReviewRating = val;
+  document.querySelectorAll('#svc-star-row .star-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.val) <= val);
+  });
+}
+
+async function submitServiceReview() {
+  const bookingId = document.getElementById('svc-review-booking-id')?.value;
+  const comment = document.getElementById('svc-review-text')?.value.trim();
+  if (!svcReviewRating) { toast('Select a rating', '', 'warn'); return; }
+  if (!bookingId) return;
+
+  // Get provider from booking
+  const { data: booking } = await db.from('service_bookings').select('provider_id').eq('id', bookingId).single();
+  if (!booking) { toast('Booking not found', '', 'error'); return; }
+
+  try {
+    const { error } = await db.from('service_reviews').insert({
+      booking_id: bookingId,
+      reviewer_id: currentUser.id,
+      provider_id: booking.provider_id,
+      rating: svcReviewRating,
+      comment: validateInput(comment)
+    });
+    if (error) throw error;
+    toast('Review Submitted! ⭐', 'Thank you for your feedback', 'success');
+    closeModal('service-review-modal');
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 8: ORDER TRACKING
+// ════════════════════════════════════════════════════════════
+async function showOrderTracking(orderId) {
+  showModal('tracking-modal');
+  const container = document.getElementById('tracking-timeline');
+  if (!container) return;
+  container.innerHTML = '<div class="skeleton" style="height:30px"></div>'.repeat(4);
+
+  const { data: events } = await db.from('order_tracking')
+    .select('*')
+    .eq('order_id', orderId)
+    .order('created_at', { ascending: true });
+
+  const allStatuses = ['pending','confirmed','picked_up','in_transit','out_for_delivery','delivered'];
+  const statusLabels = {pending:'Order Placed',confirmed:'Confirmed',picked_up:'Picked Up',in_transit:'In Transit',out_for_delivery:'Out for Delivery',delivered:'Delivered'};
+  const statusIcons = {pending:'fa-receipt',confirmed:'fa-check',picked_up:'fa-box',in_transit:'fa-truck',out_for_delivery:'fa-motorcycle',delivered:'fa-house-circle-check'};
+
+  const completedStatuses = (events||[]).map(e => e.status);
+
+  container.innerHTML = allStatuses.map((status, i) => {
+    const done = completedStatuses.includes(status);
+    const event = (events||[]).find(e => e.status === status);
+    const isCurrent = done && !completedStatuses.includes(allStatuses[i+1]);
+    return `
+    <div style="display:flex;gap:.75rem;padding-bottom:1.2rem;${i<allStatuses.length-1?'border-left:2px solid '+(done?'var(--green)':'var(--border)'):'border:none'};margin-left:11px;padding-left:1.2rem;position:relative">
+      <div style="position:absolute;left:-12px;top:0;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;${done?'background:var(--green);color:#fff':'background:var(--cream);border:2px solid var(--border);color:var(--text3)'}${isCurrent?';box-shadow:0 0 0 4px rgba(25,168,71,.2)':''}">
+        <i class="fa-solid ${statusIcons[status]||'fa-circle'}"></i>
+      </div>
+      <div>
+        <div class="font-bold text-sm" style="${done?'':'color:var(--text3)'}">${statusLabels[status]||status}</div>
+        ${event ? `<div class="text-xs color-text3">${fmtDate(event.created_at)}${event.note?' · '+escHtml(event.note):''}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('tracking-order-id').textContent = orderId;
+}
+
+// Seller: add tracking update
+async function addTrackingUpdate(orderId) {
+  const status = prompt('Enter status (picked_up, in_transit, out_for_delivery, delivered):');
+  if (!status) return;
+  const note = prompt('Add a note (optional):') || '';
+  try {
+    await db.from('order_tracking').insert({ order_id: orderId, status, note: validateInput(note), updated_by: currentUser.id });
+    toast('Tracking Updated', `Status: ${status}`, 'success');
+  } catch(e) { toast('Failed', e.message, 'error'); }
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 9: ADMIN REPORT EXPORT (CSV / PDF)
+// ════════════════════════════════════════════════════════════
+async function exportAdminReport(type) {
+  toast('Generating Report...', '', 'info', 2000);
+  let rows = [];
+  let filename = '';
+
+  if (type === 'sellers') {
+    const { data } = await db.from('profiles').select('name, email, role, commission_paid, trial_end, created_at, seller_tier').in('role', ['seller', 'service_provider']);
+    rows = (data||[]).map(s => ({
+      Name: s.name, Email: s.email, Role: s.role,
+      'Commission Paid': s.commission_paid ? 'Yes' : 'No',
+      'Trial End': s.trial_end || 'N/A',
+      Tier: s.seller_tier || 'bronze',
+      'Joined': s.created_at
+    }));
+    filename = 'buysell_sellers_report.csv';
+  } else if (type === 'orders') {
+    const { data } = await db.from('orders').select('id, total_amount, status, payment_method, created_at').order('created_at', { ascending: false }).limit(500);
+    rows = (data||[]).map(o => ({
+      'Order ID': o.id, Amount: o.total_amount, Status: o.status,
+      Payment: o.payment_method, Date: o.created_at
+    }));
+    filename = 'buysell_orders_report.csv';
+  } else if (type === 'revenue') {
+    const { data } = await db.from('orders').select('total_amount, status, created_at').eq('status', 'delivered');
+    const total = (data||[]).reduce((s,o) => s + (o.total_amount||0), 0);
+    const commission = total * 0.03;
+    rows = [
+      { Metric: 'Total Delivered Orders', Value: (data||[]).length },
+      { Metric: 'Total GMV', Value: total },
+      { Metric: 'Platform Commission (3%)', Value: commission },
+      { Metric: 'Report Date', Value: new Date().toLocaleDateString() }
+    ];
+    filename = 'buysell_revenue_report.csv';
+  } else if (type === 'disputes') {
+    const { data } = await db.from('disputes').select('id, order_id, dispute_type, status, description, created_at');
+    rows = (data||[]).map(d => ({
+      ID: d.id, 'Order ID': d.order_id, Type: d.dispute_type,
+      Status: d.status, Description: (d.description||'').substring(0,100), Date: d.created_at
+    }));
+    filename = 'buysell_disputes_report.csv';
+  }
+
+  if (!rows.length) { toast('No data to export', '', 'warn'); return; }
+
+  // Convert to CSV
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(','), ...rows.map(r => headers.map(h => `"${String(r[h]||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+  toast('Report Downloaded! 📊', filename, 'success');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 10: PWA INSTALL PROMPT
+// ════════════════════════════════════════════════════════════
+let deferredInstallPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  const installBar = document.getElementById('pwa-install-bar');
+  if (installBar) installBar.classList.remove('hidden');
+});
+
+function installPWA() {
+  if (!deferredInstallPrompt) { toast('Already installed or not supported', '', 'info'); return; }
+  deferredInstallPrompt.prompt();
+  deferredInstallPrompt.userChoice.then(choice => {
+    if (choice.outcome === 'accepted') {
+      toast('App Installed! 📱', 'BUYSELL is now on your home screen', 'success');
+    }
+    deferredInstallPrompt = null;
+    const installBar = document.getElementById('pwa-install-bar');
+    if (installBar) installBar.classList.add('hidden');
+  });
+}
+
+function dismissInstallBar() {
+  const installBar = document.getElementById('pwa-install-bar');
+  if (installBar) installBar.classList.add('hidden');
+  sessionStorage.setItem('pwa_dismissed', '1');
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 11: SELLER ANALYTICS DASHBOARD
+// ════════════════════════════════════════════════════════════
+async function loadSellerAnalytics() {
+  const container = document.getElementById('seller-analytics-content');
+  if (!container || !currentUser) return;
+  container.innerHTML = '<div class="skeleton" style="height:100px"></div>';
+
+  try {
+    const { data: products } = await db.from('products').select('id, name, views, status').eq('seller_id', currentUser.id);
+    const { data: orders } = await db.from('orders').select('total_amount, status, created_at, items').eq('status', 'delivered');
+    const { data: reviews } = await db.from('reviews').select('rating').eq('seller_id', currentUser.id);
+
+    const totalViews = (products||[]).reduce((s,p) => s + (p.views||0), 0);
+    const totalOrders = (orders||[]).length;
+    const totalRevenue = (orders||[]).reduce((s,o) => s + (o.total_amount||0), 0);
+    const avgRating = reviews?.length ? (reviews.reduce((s,r) => s + r.rating, 0) / reviews.length).toFixed(1) : '0.0';
+    const conversionRate = totalViews > 0 ? ((totalOrders / totalViews) * 100).toFixed(1) : '0.0';
+
+    // Top products
+    const topProducts = (products||[])
+      .sort((a,b) => (b.views||0) - (a.views||0))
+      .slice(0, 5);
+
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Total Views</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--blue)">${totalViews.toLocaleString()}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Conversion Rate</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--purple)">${conversionRate}%</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Avg Rating</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--gold)">⭐ ${avgRating}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Revenue</div>
+          <div style="font-size:1.3rem;font-weight:800;color:var(--green)">${fmtN(totalRevenue)}</div>
+        </div>
+      </div>
+      ${renderSellerBadge(totalOrders, parseFloat(avgRating))}
+      <div class="card card-pad mt-3">
+        <h3 class="mb-3"><i class="fa-solid fa-fire color-gold"></i> Top Products by Views</h3>
+        ${topProducts.length ? topProducts.map((p, i) => `
+          <div class="flex justify-between items-center py-2 ${i<topProducts.length-1?'border-b border-border':''}">
+            <div class="text-sm font-600">${i+1}. ${escHtml(p.name)}</div>
+            <div class="text-xs color-text3"><i class="fa-solid fa-eye"></i> ${(p.views||0).toLocaleString()}</div>
+          </div>
+        `).join('') : '<p class="color-text3 text-sm">No product data yet.</p>'}
+      </div>`;
+  } catch(e) { console.error('Analytics error:', e); }
+}
+
+// ════════════════════════════════════════════════════════════
+//  FEATURE 12: MULTI-LANGUAGE SUPPORT (Pidgin, Hausa, Yoruba, Igbo)
+// ════════════════════════════════════════════════════════════
+const TRANSLATIONS = {
+  en: { shop:'Shop', cart:'Cart', orders:'My Orders', services:'Hire Services', search:'Search products...',
+        welcome:'Welcome to', tagline:'Nigeria\'s Marketplace', addToCart:'Add to Cart', buyNow:'Buy Now',
+        checkout:'Checkout', wishlist:'Wishlist', compare:'Compare', messages:'Messages', hello:'Hello' },
+  pcm: { shop:'Buy Things', cart:'My Basket', orders:'My Orders dem', services:'Hire Worker', search:'Find wetin you want...',
+        welcome:'Welcome to', tagline:'Naija Marketplace', addToCart:'Put for basket', buyNow:'Buy am now',
+        checkout:'Pay money', wishlist:'Things I like', compare:'Compare am', messages:'Message', hello:'How far' },
+  ha: { shop:'Saya', cart:'Kayan Siye', orders:'Oda na', services:'Dauka Ma\'aikaci', search:'Nemo kaya...',
+        welcome:'Barka da zuwa', tagline:'Kasuwar Nigeria', addToCart:'Saka cikin jaka', buyNow:'Saya yanzu',
+        checkout:'Checkout', wishlist:'Abubuwan da nake so', compare:'Kwatanta', messages:'Sakonni', hello:'Sannu' },
+  yo: { shop:'Ra', cart:'Apó Rírà', orders:'Àṣẹ mi', services:'Gbé Oníṣẹ', search:'Wá ohun tí o fẹ...',
+        welcome:'Ẹ káàbọ̀ sí', tagline:'Ọjà Nigeria', addToCart:'Fi sí apó', buyNow:'Ra báyìí',
+        checkout:'Sanwó', wishlist:'Ohun tí mo fẹ́ràn', compare:'Fi wéra', messages:'Ifiranṣẹ́', hello:'Pẹ̀lẹ́' },
+  ig: { shop:'Zụta', cart:'Ngwá Ọzụzụ', orders:'Usoro m', services:'Goo Onye ọrụ', search:'Chọọ ngwa...',
+        welcome:'Nnọọ na', tagline:'Ahịa Nigeria', addToCart:'Tinye n\'ime ngwá', buyNow:'Zụta ugbu a',
+        checkout:'Kwụọ ụgwọ', wishlist:'Ihe ndị m chọrọ', compare:'Tụnyere', messages:'Ozi', hello:'Nnọọ' }
+};
+
+let currentLang = localStorage.getItem('bs_lang') || 'en';
+
+function setLanguage(lang) {
+  currentLang = lang;
+  localStorage.setItem('bs_lang', lang);
+  applyTranslations();
+  toast('Language Changed', lang.toUpperCase(), 'success');
+}
+
+function t(key) { return TRANSLATIONS[currentLang]?.[key] || TRANSLATIONS.en[key] || key; }
+
+function applyTranslations() {
+  document.querySelectorAll('[data-t]').forEach(el => {
+    const key = el.dataset.t;
+    if (TRANSLATIONS[currentLang]?.[key]) el.textContent = TRANSLATIONS[currentLang][key];
+  });
+}
+
+// ════════════════════════════════════════════════════════════
+//  INIT: Load new features on page ready
+// ════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  loadFlashSales();
+  updateWishlistBadge();
+  updateCompareBadge();
+  applyTranslations();
+
+  // After auth check
+  const origOnAuth = typeof onAuthSuccess === 'function' ? onAuthSuccess : null;
+  if (origOnAuth) {
+    const _wrapped = onAuthSuccess;
+    // loadWishlist and inbox on login handled elsewhere
+  }
+});
+
+// Hook into showDash for seller analytics + coupons
+const _origShowDash2 = showDash;
+showDash = function(section) {
+  _origShowDash2(section);
+  if (section === 'analytics') loadSellerAnalytics();
+  if (section === 'coupons') loadSellerCoupons();
+  if (section === 'flash') loadFlashSaleProducts();
+};
+
+async function loadFlashSaleProducts() {
+  if (!currentUser) return;
+  const select = document.getElementById('flash-product');
+  if (!select) return;
+  const { data } = await db.from('products').select('id, name').eq('seller_id', currentUser.id);
+  if (!data?.length) { select.innerHTML = '<option value="">No products available</option>'; return; }
+  select.innerHTML = data.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+}
+
+const origOnAuthSucc = onAuthSuccess;
+onAuthSuccess = async function(u) {
+  if (origOnAuthSucc) await origOnAuthSucc(u);
+  loadWishlist();
+  loadInboxCount();
+};
