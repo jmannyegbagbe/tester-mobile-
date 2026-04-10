@@ -102,6 +102,7 @@ let products = [], filteredProducts = [], activeFilters = {};
 let carouselIndex = 0, carouselTimer = null;
 let selectedRating = 0, checkoutPaymentMethod = 'paystack';
 let deferredInstallPrompt = null, salesChart = null;
+let checkoutTotal = 0;
 let carouselStartX = 0;
 
 // ====================================================
@@ -1055,10 +1056,11 @@ function startCheckout() {
   if (p.name) document.getElementById('co-name').value = p.name;
   document.getElementById('co-pay-email').textContent = currentUser.email;
   const total = cart.reduce((s,c)=>s+(c.price*(c.qty||1)),0);
+  checkoutTotal = total;
   const comm = Math.round(total * PLATFORM_FEE_PCT);
   document.getElementById('co-pay-amount').textContent = fmtN(total);
   document.getElementById('co-commission').textContent = fmtN(comm);
-  document.getElementById('co-total').textContent = fmtN(total);
+  document.getElementById('co-total').textContent = fmtN(checkoutTotal);
   // Order items
   document.getElementById('co-items').innerHTML = cart.map(c=>`
     <div class="order-item">
@@ -1104,7 +1106,7 @@ function payWithPaystack() {
   const handler = PaystackPop.setup({
     key: PAYSTACK_PUBLIC_KEY,
     email: currentUser.email,
-    amount: total * 100, 
+    amount: checkoutTotal * 100, 
     callback: async function(response) {
       // 1. Show a loader
       toast('Verifying Payment...', 'Please do not close the window', 'info');
@@ -4519,8 +4521,9 @@ async function applyCoupon() {
     if (discountEl) discountEl.textContent = '-' + fmtN(discount);
     if (discountRow) discountRow.classList.remove('hidden');
 
+    checkoutTotal = cartTotal - discount;
     const totalEl = document.getElementById('co-total');
-    if (totalEl) totalEl.textContent = fmtN(cartTotal - discount);
+    if (totalEl) totalEl.textContent = fmtN(checkoutTotal);
 
     toast(`Coupon Applied! 🎉`, `${coupon.discount_type === 'percent' ? coupon.discount_value + '%' : fmtN(coupon.discount_value)} off`, 'success');
     codeInput.value = '';
@@ -4538,8 +4541,9 @@ function removeCoupon() {
   if (codeInput) { codeInput.disabled = false; codeInput.value = ''; }
   // Recalculate total
   const cartTotal = cart.reduce((s, c) => s + c.price * (c.qty || 1), 0);
+  checkoutTotal = cartTotal;
   const totalEl = document.getElementById('co-total');
-  if (totalEl) totalEl.textContent = fmtN(cartTotal);
+  if (totalEl) totalEl.textContent = fmtN(checkoutTotal);
   toast('Coupon removed', '', 'info');
 }
 
@@ -4970,7 +4974,6 @@ async function exportAdminReport(type) {
 // ════════════════════════════════════════════════════════════
 //  FEATURE 10: PWA INSTALL PROMPT
 // ════════════════════════════════════════════════════════════
-let deferredInstallPrompt = null;
 
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
