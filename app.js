@@ -59,9 +59,6 @@ let chatHistory = [];
 let adminAiHistory = [];
 
 const CLAUDE_EDGE_URL = `${EDGE_URL}/smooth-handler`;
-let chatHistory = []; 
-let adminAiHistory = [];
-
 /** Call a deployed Edge Function securely with the user's JWT */
 async function callEdge(fnName, body) {
   const session = (await db.auth.getSession()).data.session;
