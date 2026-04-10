@@ -131,6 +131,14 @@
     <div class="nav-actions">
       <div id="nav-auth-btns"><button class="btn btn-primary btn-sm" onclick="showModal('auth-modal');toggleAuth('login')">Sign In</button></div>
       <div id="nav-user-btns" class="hidden flex items-center gap-2">
+        <div class="cart-btn" onclick="showWishlistModal()" title="Wishlist" style="position:relative">
+          <i class="fa-solid fa-heart" style="color:#ef4444"></i>
+          <span class="cart-badge hidden" id="wishlist-count">0</span>
+        </div>
+        <div class="cart-btn" onclick="showInbox()" title="Messages" style="position:relative">
+          <i class="fa-solid fa-envelope"></i>
+          <span class="cart-badge hidden" id="inbox-count">0</span>
+        </div>
         <div class="cart-btn" onclick="openCart()" title="Cart" id="cart-btn-el">
           <i class="fa-solid fa-cart-shopping"></i>
           <span class="cart-badge" id="cart-count">0</span>
@@ -190,6 +198,14 @@
         <button class="carousel-dot" onclick="goSlide(2)"></button>
       </div>
     </div>
+  </div>
+
+  <!-- Flash Sales Banner -->
+  <div id="flash-sales-container" class="buyer-inner hidden" style="padding-top:.5rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.65rem">
+      <h2 style="margin:0;font-size:1.05rem;display:flex;align-items:center;gap:.4rem"><span style="background:#ef4444;color:#fff;padding:.2rem .5rem;border-radius:6px;font-size:.75rem;font-weight:700">⚡ FLASH SALE</span> Deal of the Day</h2>
+    </div>
+    <div id="flash-sales-list" style="display:flex;gap:.75rem;overflow-x:auto;padding-bottom:.5rem;-webkit-overflow-scrolling:touch"></div>
   </div>
 
   <!-- Categories -->
@@ -376,6 +392,12 @@
           <a class="dash-nav-item" onclick="showDash('affiliate');closeMobSidebar()"><i class="fa-solid fa-link"></i> Affiliate</a>
           <a class="dash-nav-item" onclick="showDash('advertise');closeMobSidebar()"><i class="fa-solid fa-bullhorn"></i> Advertise <span class="nav-new" style="background:#ea580c">AD</span></a>
           <a class="dash-nav-item" onclick="showDash('reviews');closeMobSidebar()"><i class="fa-solid fa-star"></i> Reviews</a>
+          <a class="dash-nav-item" onclick="showDash('analytics');closeMobSidebar()"><i class="fa-solid fa-chart-line"></i> Analytics</a>
+        </div>
+        <div class="dash-nav-section">
+          <div class="dash-nav-label">Marketing</div>
+          <a class="dash-nav-item" onclick="showDash('coupons');closeMobSidebar()"><i class="fa-solid fa-ticket"></i> Coupons</a>
+          <a class="dash-nav-item" onclick="showDash('flash');closeMobSidebar()"><i class="fa-solid fa-bolt"></i> Flash Sales</a>
         </div>
         <div class="dash-nav-section">
           <div class="dash-nav-label">Finance</div>
@@ -700,6 +722,61 @@
           </div>
           <button class="btn btn-paystack btn-full mb-2" onclick="payCommissionPaystack()"><i class="fa-solid fa-credit-card"></i> Pay ₦5,000 via Paystack</button>
           <button class="btn btn-outline btn-full" onclick="showModal('commission-modal')"><i class="fa-solid fa-upload"></i> Upload Bank Transfer Receipt</button>
+        </div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div id="ds-analytics" class="dash-section">
+        <h1 class="dash-page-title">📊 Store Analytics</h1>
+        <p class="dash-page-sub">Understand your performance — views, conversions, and revenue</p>
+        <div id="seller-analytics-content">
+          <div class="skeleton" style="height:200px"></div>
+        </div>
+      </div>
+
+      <!-- COUPONS -->
+      <div id="ds-coupons" class="dash-section">
+        <h1 class="dash-page-title">🎫 Coupon Manager</h1>
+        <p class="dash-page-sub">Create discount codes to boost your sales</p>
+        <div class="card card-pad-lg mb-4" style="max-width:600px">
+          <h3 class="mb-3"><i class="fa-solid fa-plus-circle color-green"></i> Create New Coupon</h3>
+          <div class="form-grid form-grid-2">
+            <div class="form-group"><label class="form-label">Coupon Code <span class="req">*</span></label><input type="text" id="coupon-new-code" class="form-input" placeholder="e.g. SAVE20" style="text-transform:uppercase"></div>
+            <div class="form-group"><label class="form-label">Discount Type</label>
+              <select id="coupon-type" class="form-select"><option value="percent">Percentage (%)</option><option value="fixed">Fixed Amount (₦)</option></select>
+            </div>
+          </div>
+          <div class="form-grid form-grid-2">
+            <div class="form-group"><label class="form-label">Discount Value <span class="req">*</span></label><input type="number" id="coupon-value" class="form-input" placeholder="e.g. 20" inputmode="numeric"></div>
+            <div class="form-group"><label class="form-label">Min Order (₦)</label><input type="number" id="coupon-min" class="form-input" placeholder="0" inputmode="numeric"></div>
+          </div>
+          <div class="form-grid form-grid-2">
+            <div class="form-group"><label class="form-label">Max Uses</label><input type="number" id="coupon-max" class="form-input" placeholder="100" inputmode="numeric"></div>
+            <div class="form-group"><label class="form-label">Valid Days</label><input type="number" id="coupon-days" class="form-input" placeholder="30" inputmode="numeric"></div>
+          </div>
+          <button class="btn btn-primary btn-full" onclick="createCoupon()"><i class="fa-solid fa-ticket"></i> Create Coupon</button>
+        </div>
+        <div class="card card-pad" style="max-width:600px">
+          <h3 class="mb-3"><i class="fa-solid fa-list"></i> My Coupons</h3>
+          <div id="seller-coupons-list"><p class="color-text3 text-sm">No coupons yet.</p></div>
+        </div>
+      </div>
+
+      <!-- FLASH SALES -->
+      <div id="ds-flash" class="dash-section">
+        <h1 class="dash-page-title">⚡ Flash Sales</h1>
+        <p class="dash-page-sub">Create time-limited deals to drive urgency</p>
+        <div class="card card-pad-lg" style="max-width:500px">
+          <h3 class="mb-3"><i class="fa-solid fa-bolt color-gold"></i> Create Flash Sale</h3>
+          <div class="form-group">
+            <label class="form-label">Select Product <span class="req">*</span></label>
+            <select id="flash-product" class="form-select"><option value="">Loading products...</option></select>
+          </div>
+          <div class="form-grid form-grid-2">
+            <div class="form-group"><label class="form-label">Sale Price (₦) <span class="req">*</span></label><input type="number" id="flash-price" class="form-input" placeholder="Discounted price" inputmode="numeric"></div>
+            <div class="form-group"><label class="form-label">Duration (hours)</label><input type="number" id="flash-hours" class="form-input" placeholder="24" value="24" inputmode="numeric"></div>
+          </div>
+          <button class="btn btn-primary btn-full" onclick="createFlashSale()"><i class="fa-solid fa-bolt"></i> Launch Flash Sale</button>
         </div>
       </div>
 
@@ -1396,6 +1473,14 @@
   <textarea id="co-address" class="form-textarea" required placeholder="Street, area, city, state" rows="3"></textarea>
 </div>
       <div class="order-items-list" id="co-items"></div>
+      <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+        <input type="text" id="coupon-code" class="form-input" placeholder="Promo code" style="text-transform:uppercase">
+        <button class="btn btn-outline" onclick="applyCoupon()">Apply</button>
+      </div>
+      <div class="flex justify-between items-center hidden mb-2" id="co-discount-row">
+        <span class="font-600 color-green">Discount</span><span class="font-bold color-green" id="co-discount"></span>
+        <button class="btn btn-sm" style="background:none;border:none;color:var(--text3);padding:0;margin-left:.5rem" onclick="removeCoupon()"><i class="fa-solid fa-times"></i></button>
+      </div>
       <div class="flex justify-between items-center" style="margin-bottom:1rem"><span class="font-600">Total</span><span class="font-bold" style="font-size:1.1rem;color:var(--green)" id="co-total"></span></div>
       <button class="btn btn-primary btn-full" onclick="goCheckoutStep(2)">Continue to Payment <i class="fa-solid fa-arrow-right"></i></button>
     </div>
@@ -1580,6 +1665,7 @@
       <a id="sp-p-wa-btn" href="#" target="_blank" class="btn btn-primary btn-full" style="text-decoration:none;font-size:.95rem">
         <i class="fa-brands fa-whatsapp"></i> Contact on WhatsApp
       </a>
+      <div id="sp-p-book-btn"></div>
     </div>
   </div>
 </div>
@@ -1711,6 +1797,15 @@
             </div>
             <canvas id="admin-revenue-chart"></canvas>
           </div>
+          <div class="card card-pad mt-3">
+            <h3 class="mb-2"><i class="fa-solid fa-file-export color-green"></i> Export Reports</h3>
+            <div class="flex gap-2 flex-wrap">
+              <button class="btn btn-outline btn-sm" onclick="exportAdminReport('sellers')"><i class="fa-solid fa-store"></i> Sellers CSV</button>
+              <button class="btn btn-outline btn-sm" onclick="exportAdminReport('orders')"><i class="fa-solid fa-receipt"></i> Orders CSV</button>
+              <button class="btn btn-outline btn-sm" onclick="exportAdminReport('revenue')"><i class="fa-solid fa-coins"></i> Revenue CSV</button>
+              <button class="btn btn-outline btn-sm" onclick="exportAdminReport('disputes')"><i class="fa-solid fa-gavel"></i> Disputes CSV</button>
+            </div>
+          </div>
         </div>
 
         <!-- ═══ SELLERS TAB ═══ -->
@@ -1836,18 +1931,20 @@
         <div id="adm-tab-ai" class="adm-tab hidden">
           <div class="card card-pad-lg" style="max-width:600px">
             <h3 class="mb-1"><i class="fa-solid fa-robot color-green"></i> Admin AI Assistant</h3>
-            <p class="text-xs color-text3 mb-3">Ask Claude anything about your platform — sales trends, seller issues, dispute advice, growth strategies.</p>
+            <p class="text-xs color-text3 mb-3">AI COO with <b>live database access</b> — reads disputes, sellers, orders, and can suspend/approve users on command.</p>
             <div id="admin-ai-messages" style="height:280px;overflow-y:auto;background:var(--cream);border-radius:var(--radius-sm);border:1px solid var(--border);padding:.88rem;display:flex;flex-direction:column;gap:.58rem;margin-bottom:.75rem">
               <div class="cb-msg bot" style="display:flex;gap:.42rem">
                 <div class="cb-avatar" style="background:var(--green-xlt);color:var(--green);font-size:.76rem;flex-shrink:0;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-robot"></i></div>
-                <div class="cb-bubble" style="background:#fff;border:1px solid var(--border);padding:.52rem .82rem;border-radius:14px;font-size:.79rem;line-height:1.5">Hello Admin! 👋 I have full context of your BUYSELL platform. Ask me about sales, disputes, seller performance, or growth strategies.</div>
+                <div class="cb-bubble" style="background:#fff;border:1px solid var(--border);padding:.52rem .82rem;border-radius:14px;font-size:.79rem;line-height:1.5">Hello Admin! 👋 I have <b>live database access</b> to your BUYSELL platform. I can read disputes, check seller statuses, approve receipts, and suspend unpaid users. Try asking me to review open disputes or enforce commission payments.</div>
               </div>
             </div>
             <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.65rem">
+              <button class="cb-quick-btn" onclick="askAdminBot('Read all open disputes and give me a summary with recommendations')">⚖️ Read Disputes</button>
+              <button class="cb-quick-btn" onclick="askAdminBot('Show me all unpaid sellers and service providers with expired trials')">🔍 Unpaid Users</button>
+              <button class="cb-quick-btn" onclick="askAdminBot('Suspend all sellers who have not paid and their trial has expired')">⛔ Enforce Sellers</button>
+              <button class="cb-quick-btn" onclick="askAdminBot('Suspend all service providers who have not paid and their trial has expired')">⛔ Enforce Providers</button>
               <button class="cb-quick-btn" onclick="askAdminBot('Summarise platform performance this month')">📊 Performance</button>
-              <button class="cb-quick-btn" onclick="askAdminBot('How should I handle a seller dispute?')">⚖️ Disputes</button>
               <button class="cb-quick-btn" onclick="askAdminBot('Give me 5 growth strategies for BUYSELL Nigeria')">🚀 Growth</button>
-              <button class="cb-quick-btn" onclick="askAdminBot('What commission pricing is best for Nigerian marketplaces?')">💰 Pricing</button>
             </div>
             <div style="display:flex;gap:.5rem">
               <input type="text" id="admin-ai-input" class="form-input" placeholder="Ask anything about your platform…" onkeypress="if(event.key==='Enter')askAdminBot()">
@@ -1926,11 +2023,16 @@
           <div class="u-email" id="spd-user-email">—</div>
         </div>
       </div>
+      <div style="padding:.5rem .6rem;border-bottom:1px solid rgba(255,255,255,.06)">
+        <span id="spd-comm-badge" class="badge badge-gold" style="font-size:.65rem;width:100%;text-align:center;display:block">Trial</span>
+      </div>
       <nav class="dash-nav">
         <div class="dash-nav-section">
           <div class="dash-nav-label">Workspace</div>
           <button class="dash-nav-item active" id="spd-nav-overview" onclick="showSpdDash('overview')"><i class="fa-solid fa-chart-pie"></i> Overview</button>
           <button class="dash-nav-item" id="spd-nav-portfolio" onclick="showSpdDash('portfolio')"><i class="fa-solid fa-briefcase"></i> My Portfolio</button>
+          <button class="dash-nav-item" id="spd-nav-bookings" onclick="showSpdDash('bookings')" style="position:relative"><i class="fa-solid fa-calendar-check"></i> Bookings <span id="spd-bookings-badge" class="badge badge-red hidden" style="position:absolute;right:.5rem;top:50%;transform:translateY(-50%);font-size:.6rem;padding:.15rem .4rem">0</span></button>
+          <button class="dash-nav-item" id="spd-nav-earnings" onclick="showSpdDash('earnings')"><i class="fa-solid fa-coins"></i> Earnings</button>
           <button class="dash-nav-item" id="spd-nav-leads" onclick="showSpdDash('leads')"><i class="fa-solid fa-envelope"></i> Leads & Messages</button>
           <button class="dash-nav-item" id="spd-nav-reviews" onclick="showSpdDash('reviews')"><i class="fa-solid fa-star"></i> Reviews</button>
         </div>
@@ -2023,6 +2125,32 @@
         </div>
       </div>
 
+      <!-- Bookings Section -->
+      <div id="spd-sec-bookings" class="spd-section hidden">
+        <div class="card card-pad">
+          <div class="flex justify-between items-center mb-3">
+            <h3 style="margin:0"><i class="fa-solid fa-calendar-check"></i> My Bookings</h3>
+            <button class="btn btn-outline btn-sm" onclick="loadProviderBookings()"><i class="fa-solid fa-sync"></i> Refresh</button>
+          </div>
+          <div id="spd-bookings-list">
+            <div class="empty-state">
+              <i class="fa-solid fa-inbox" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i>
+              <p class="color-text3 text-sm">No bookings yet. Share your services to get hired!</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Earnings Section -->
+      <div id="spd-sec-earnings" class="spd-section hidden">
+        <div id="spd-earnings-content">
+          <div class="empty-state">
+            <i class="fa-solid fa-coins" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i>
+            <p class="color-text3 text-sm">Complete bookings to start earning!</p>
+          </div>
+        </div>
+      </div>
+
       <!-- Leads Section -->
       <div id="spd-sec-leads" class="spd-section hidden">
         <div class="card card-pad">
@@ -2057,6 +2185,108 @@
       </div>
 
     </main>
+  </div>
+</div>
+
+<!-- PWA Install Bar -->
+<div id="pwa-install-bar" class="hidden" style="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:999;background:linear-gradient(135deg,var(--forest),#1a3a26);color:#fff;padding:.65rem 1.2rem;border-radius:14px;display:flex;align-items:center;gap:.75rem;box-shadow:0 4px 20px rgba(0,0,0,.3);max-width:380px;width:90%">
+  <i class="fa-solid fa-mobile-screen" style="font-size:1.3rem;color:var(--gold)"></i>
+  <div style="flex:1">
+    <div style="font-weight:700;font-size:.85rem">Install BUYSELL App</div>
+    <div style="font-size:.7rem;opacity:.7">Add to home screen for the best experience</div>
+  </div>
+  <button onclick="installPWA()" class="btn btn-sm" style="background:var(--gold);color:#000;font-weight:700">Install</button>
+  <button onclick="dismissInstallBar()" style="background:none;border:none;color:rgba(255,255,255,.5);cursor:pointer;font-size:.85rem"><i class="fa-solid fa-times"></i></button>
+</div>
+
+<!-- Compare Bar (floating) -->
+<div id="compare-bar" class="hidden" style="position:fixed;bottom:70px;left:50%;transform:translateX(-50%);z-index:998;background:var(--purple);color:#fff;padding:.5rem 1rem;border-radius:12px;display:flex;align-items:center;gap:.75rem;box-shadow:0 4px 16px rgba(0,0,0,.25)">
+  <span style="font-size:.82rem;font-weight:600" id="compare-count">0</span><span style="font-size:.78rem"> products selected</span>
+  <button onclick="showCompareModal()" class="btn btn-sm" style="background:#fff;color:var(--purple);font-weight:700">Compare Now</button>
+  <button onclick="clearCompare()" style="background:none;border:none;color:rgba(255,255,255,.6);cursor:pointer;font-size:.78rem">Clear</button>
+</div>
+
+<!-- Language Selector (floating) -->
+<div style="position:fixed;bottom:12px;left:12px;z-index:997">
+  <select onchange="setLanguage(this.value)" style="font-size:.7rem;padding:.3rem .5rem;border-radius:8px;border:1px solid var(--border);background:#fff;cursor:pointer">
+    <option value="en">🇬🇧 English</option>
+    <option value="pcm">🇳🇬 Pidgin</option>
+    <option value="ha">🇳🇬 Hausa</option>
+    <option value="yo">🇳🇬 Yoruba</option>
+    <option value="ig">🇳🇬 Igbo</option>
+  </select>
+</div>
+
+<!-- ==================== NEW MODALS ==================== -->
+
+<!-- WISHLIST MODAL -->
+<div id="wishlist-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:480px"><button class="modal-close" onclick="closeModal('wishlist-modal')"><i class="fa-solid fa-times"></i></button>
+    <h2 class="mb-3"><i class="fa-solid fa-heart" style="color:#ef4444"></i> My Wishlist</h2>
+    <div id="wishlist-items"></div>
+  </div>
+</div>
+
+<!-- COMPARE MODAL -->
+<div id="compare-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:700px;padding:0"><button class="modal-close" onclick="closeModal('compare-modal')" style="z-index:2"><i class="fa-solid fa-times"></i></button>
+    <div style="padding:1.25rem">
+      <h2 class="mb-3"><i class="fa-solid fa-code-compare" style="color:var(--purple)"></i> Product Comparison</h2>
+      <div id="compare-content" style="overflow-x:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- INBOX MODAL -->
+<div id="inbox-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:480px"><button class="modal-close" onclick="closeModal('inbox-modal')"><i class="fa-solid fa-times"></i></button>
+    <h2 class="mb-3"><i class="fa-solid fa-envelope color-green"></i> Messages</h2>
+    <div id="inbox-list"></div>
+  </div>
+</div>
+
+<!-- MESSAGE MODAL (Conversation) -->
+<div id="message-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:480px;padding:0;display:flex;flex-direction:column;height:70vh">
+    <div style="padding:.75rem 1rem;background:var(--forest);color:#fff;display:flex;align-items:center;justify-content:space-between;border-radius:var(--radius-md) var(--radius-md) 0 0">
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <div style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center"><i class="fa-solid fa-user"></i></div>
+        <span class="font-bold" id="msg-partner-name">User</span>
+      </div>
+      <button onclick="closeModal('message-modal')" style="background:none;border:none;color:#fff;cursor:pointer;font-size:1.1rem"><i class="fa-solid fa-times"></i></button>
+    </div>
+    <div id="msg-conversation" style="flex:1;overflow-y:auto;padding:.75rem;background:var(--cream);display:flex;flex-direction:column;gap:.3rem"></div>
+    <div style="padding:.5rem;display:flex;gap:.4rem;border-top:1px solid var(--border)">
+      <input type="text" id="msg-input" class="form-input" placeholder="Type a message..." onkeypress="if(event.key==='Enter')sendMessage()" style="flex:1">
+      <button class="btn btn-primary" onclick="sendMessage()"><i class="fa-solid fa-paper-plane"></i></button>
+    </div>
+  </div>
+</div>
+
+<!-- ORDER TRACKING MODAL -->
+<div id="tracking-modal" class="modal-overlay">
+  <div class="modal-box" style="max-width:450px"><button class="modal-close" onclick="closeModal('tracking-modal')"><i class="fa-solid fa-times"></i></button>
+    <h2 class="mb-1"><i class="fa-solid fa-truck color-green"></i> Order Tracking</h2>
+    <p class="color-text3 text-sm mb-3">Order: <span class="font-bold" id="tracking-order-id"></span></p>
+    <div id="tracking-timeline" style="padding-left:.5rem"></div>
+  </div>
+</div>
+
+<!-- SERVICE REVIEW MODAL -->
+<div id="service-review-modal" class="modal-overlay">
+  <div class="modal-box"><button class="modal-close" onclick="closeModal('service-review-modal')"><i class="fa-solid fa-times"></i></button>
+    <h2 class="mb-1">Rate Service Provider</h2>
+    <p class="color-text3 text-sm mb-3" id="svc-review-provider"></p>
+    <input type="hidden" id="svc-review-booking-id">
+    <div class="review-star-row" id="svc-star-row" style="margin-bottom:1rem">
+      <button class="star-btn" data-val="1" onclick="setSvcRating(1)">★</button>
+      <button class="star-btn" data-val="2" onclick="setSvcRating(2)">★</button>
+      <button class="star-btn" data-val="3" onclick="setSvcRating(3)">★</button>
+      <button class="star-btn" data-val="4" onclick="setSvcRating(4)">★</button>
+      <button class="star-btn" data-val="5" onclick="setSvcRating(5)">★</button>
+    </div>
+    <div class="form-group"><label class="form-label">Your Review</label><textarea id="svc-review-text" class="form-textarea" rows="3" placeholder="How was your experience?"></textarea></div>
+    <button class="btn btn-primary btn-full" onclick="submitServiceReview()"><i class="fa-solid fa-star"></i> Submit Review</button>
   </div>
 </div>
 
