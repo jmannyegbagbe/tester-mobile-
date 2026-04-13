@@ -245,7 +245,7 @@ async function handleAuth(e) {
       }
 
       const role     = rawRole === 'both' ? 'seller' : rawRole;
-      const accounts = rawRole;
+      const accounts = (rawRole === 'service_provider' || rawRole === 'both') ? 'seller' : rawRole;
 
       // Step 1: Create the account
       const { data: signUpData, error: signUpError } = await db.auth.signUp({
@@ -2271,6 +2271,68 @@ async function adminAiApproveReceipt(receiptId) {
     loadAdminReceipts();
   } catch(e) {
     toast('Failed', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  AI ACTION HANDLERS
+// ====================================================
+async function executeMassProviderSuspension() {
+  toast('Suspending Providers', 'AI is scanning service providers...', 'info', 3000);
+  const { data: providers } = await db.from('profiles').select('id, name, commission_paid, trial_end').eq('role', 'service_provider');
+  if (!providers) { toast('Failed', 'Could not retrieve providers', 'error'); return; }
+
+  const now = new Date();
+  const targetIds = providers
+    .filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now))
+    .map(s => s.id);
+
+  if (!targetIds.length) { toast('No Action Needed', 'All providers are paid or in trial', 'success'); return; }
+
+  // Pause their gigs
+  await db.from('service_gigs').update({ status: 'paused' }).in('provider_id', targetIds).catch(() => {});
+  const { error } = await db.from('profiles').update({ updated_at: new Date().toISOString() }).in('id', targetIds);
+  if (error) { toast('Error', error.message, 'error'); return; }
+
+  toast('Providers Suspended', `${targetIds.length} expired accounts locked out`, 'success', 6000);
+  loadAdminOverview();
+}
+
+async function adminAiDeactivateUser(userId) {
+  try {
+    // Pause all their products/gigs
+    await db.from('products').update({ status: 'paused' }).eq('seller_id', userId).catch(() => {});
+    await db.from('service_gigs').update({ status: 'paused' }).eq('provider_id', userId).catch(() => {});
+    // Mark commission as unpaid to trigger lockout
+    await db.from('profiles').update({ commission_paid: false, trial_end: new Date('2020-01-01').toISOString() }).eq('id', userId);
+    toast('User Deactivated', `User ${userId.substring(0,8)} has been suspended by AI`, 'warn', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Deactivation Failed', e.message, 'error');
+  }
+}
+
+async function adminAiResolveDispute(disputeId) {
+  try {
+    await db.from('disputes').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', disputeId);
+    toast('Dispute Resolved', `Dispute ${disputeId.substring(0,8)} closed by AI`, 'success');
+    loadAdminDisputes();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiApproveReceipt(receiptId) {
+  try {
+    const { data: receipt } = await db.from('commission_receipts').select('seller_id').eq('id', receiptId).single();
+    if (receipt?.seller_id) {
+      await db.from('profiles').update({ commission_paid: true }).eq('id', receipt.seller_id);
+    }
+    await db.from('commission_receipts').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', receiptId);
+    toast('Receipt Approved', 'Seller activated by AI', 'success');
+    loadAdminReceipts();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
   } 
 }
    
@@ -3779,6 +3841,180 @@ async function viewProviderProfile(providerId) {
     }
   } catch(e) {
     console.error('Profile load error:', e);
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — COMMISSION CHECK (same rules as sellers)
+// ====================================================
+async function checkServiceProviderCommission() {
+  if (!currentUser?.profile) return;
+  const p = currentUser.profile;
+  const role = p.role;
+  if (role !== 'service_provider') return;
+
+  const trialEnd = p.trial_end ? new Date(p.trial_end) : null;
+  const commPaid = p.commission_paid;
+
+  // Update SPD commission badge if it exists
+  const badge = document.getElementById('spd-comm-badge');
+  if (badge) {
+    if (commPaid) { badge.className='badge badge-green'; badge.textContent='✓ Active'; }
+    else if (trialEnd && trialEnd > new Date()) { badge.className='badge badge-gold'; badge.textContent=`Trial – ${Math.ceil((trialEnd-new Date())/86400000)}d left`; }
+    else { badge.className='badge badge-red'; badge.textContent='Suspended'; }
+  }
+
+  // Lock out if expired
+  if (!commPaid && trialEnd && trialEnd < new Date() && currentUser.email !== ADMIN_EMAIL) {
+    document.getElementById('suspended-modal').classList.add('open');
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — BOOKINGS (Provider Side)
+// ====================================================
+async function loadProviderBookings() {
+  if (!currentUser) return;
+  const container = document.getElementById('spd-bookings-list');
+  if (!container) return;
+  container.innerHTML = '<div class="skeleton-block" style="height:80px"></div>'.repeat(3);
+
+  try {
+    const { data: bookings } = await db.from('service_bookings')
+      .select('*, profiles!service_bookings_buyer_id_fkey(name, email, whatsapp), service_gigs(title)')
+      .eq('provider_id', currentUser.id)
+      .order('created_at', { ascending: false });
+
+    if (!bookings?.length) {
+      container.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox" style="font-size:2rem;color:var(--border2);display:block;margin-bottom:.65rem"></i><p class="color-text3 text-sm">No bookings yet. Share your services to get hired!</p></div>';
+      return;
+    }
+
+    const statusColors = {pending:'badge-gold',accepted:'badge-blue',in_progress:'badge-purple',completed:'badge-green',cancelled:'badge-red'};
+    container.innerHTML = bookings.map(b => {
+      const buyerName = b.profiles?.name || 'Buyer';
+      const buyerWa = (b.profiles?.whatsapp || '').replace(/\D/g,'');
+      const gigTitle = b.service_gigs?.title || 'Service';
+      return `
+      <div class="card card-pad mb-3" style="border-left:4px solid ${b.status==='completed'?'var(--green)':b.status==='cancelled'?'var(--red)':'var(--gold)'}">
+        <div class="flex justify-between items-start flex-wrap gap-2 mb-2">
+          <div>
+            <div class="font-bold text-sm">${escHtml(gigTitle)}</div>
+            <div class="text-xs color-text3"><i class="fa-solid fa-user"></i> ${escHtml(buyerName)} · ${fmtDate(b.created_at)}</div>
+            ${b.message ? `<div class="text-sm mt-1" style="color:var(--text2)">"${escHtml(b.message.substring(0,150))}"</div>` : ''}
+          </div>
+          <div class="text-right">
+            <div class="font-bold color-green">${fmtN(b.agreed_price || b.budget || 0)}</div>
+            <span class="badge ${statusColors[b.status]||'badge-gray'}">${(b.status||'pending').replace(/_/g,' ')}</span>
+          </div>
+        </div>
+        <div class="flex gap-2 flex-wrap mt-2">
+          ${b.status==='pending' ? `
+            <button onclick="updateBookingStatus('${b.id}','accepted')" class="btn btn-primary btn-sm"><i class="fa-solid fa-check"></i> Accept</button>
+            <button onclick="updateBookingStatus('${b.id}','cancelled')" class="btn btn-outline btn-sm">Decline</button>
+          ` : ''}
+          ${b.status==='accepted' ? `<button onclick="updateBookingStatus('${b.id}','in_progress')" class="btn btn-sm" style="background:#ede9fe;color:#6d28d9"><i class="fa-solid fa-play"></i> Start Work</button>` : ''}
+          ${b.status==='in_progress' ? `<button onclick="updateBookingStatus('${b.id}','completed')" class="btn btn-sm" style="background:#dcfce7;color:#15803d"><i class="fa-solid fa-check-double"></i> Mark Completed</button>` : ''}
+          ${buyerWa ? `<a href="https://wa.me/${buyerWa}" target="_blank" class="btn btn-outline btn-sm"><i class="fa-brands fa-whatsapp"></i> Chat</a>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    // Update badge count
+    const pendingCount = bookings.filter(b => b.status === 'pending').length;
+    const bookingsBadge = document.getElementById('spd-bookings-badge');
+    if (bookingsBadge) { bookingsBadge.textContent = pendingCount; bookingsBadge.classList.toggle('hidden', !pendingCount); }
+  } catch(e) {
+    console.error('loadProviderBookings:', e);
+    container.innerHTML = '<p class="color-text3 text-sm">Could not load bookings.</p>';
+  }
+}
+
+async function updateBookingStatus(bookingId, status) {
+  try {
+    const updates = { status };
+    if (status === 'completed') updates.completed_at = new Date().toISOString();
+    const { error } = await db.from('service_bookings').update(updates).eq('id', bookingId).eq('provider_id', currentUser.id);
+    if (error) throw error;
+    toast(`Booking ${status.replace(/_/g,' ')}!`, '', 'success');
+    loadProviderBookings();
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  SERVICE PROVIDER — EARNINGS
+// ====================================================
+async function loadProviderEarnings() {
+  if (!currentUser) return;
+  try {
+    const { data: bookings } = await db.from('service_bookings')
+      .select('agreed_price, budget, status, created_at')
+      .eq('provider_id', currentUser.id);
+    const completed = (bookings||[]).filter(b => b.status === 'completed');
+    const totalEarned = completed.reduce((s,b) => s + (b.agreed_price || b.budget || 0), 0);
+    const pendingJobs = (bookings||[]).filter(b => b.status === 'in_progress' || b.status === 'accepted');
+    const pendingEarnings = pendingJobs.reduce((s,b) => s + (b.agreed_price || b.budget || 0), 0);
+
+    const el = document.getElementById('spd-earnings-content');
+    if (!el) return;
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Total Earned</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--green)">${fmtN(totalEarned)}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Pending Jobs</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--purple)">${pendingJobs.length}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">In Pipeline</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--gold)">${fmtN(pendingEarnings)}</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Completed Jobs</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--green)">${completed.length}</div>
+        </div>
+      </div>
+      <div class="card card-pad">
+        <h3 class="mb-3"><i class="fa-solid fa-clock-rotate-left"></i> Recent Completions</h3>
+        ${completed.length ? completed.slice(0,10).map(b => `
+          <div class="flex justify-between items-center py-2 border-b border-border">
+            <div class="text-sm">${fmtDate(b.created_at)}</div>
+            <div class="font-bold color-green">${fmtN(b.agreed_price || b.budget || 0)}</div>
+          </div>
+        `).join('') : '<p class="color-text3 text-sm">No completed jobs yet.</p>'}
+      </div>`;
+  } catch(e) { console.error('loadProviderEarnings:', e); }
+}
+
+// ====================================================
+//  BOOK SERVICE (Buyer Side)
+// ====================================================
+async function bookService(gigId, providerId) {
+  if (!currentUser) { showModal('auth-modal'); return; }
+  const message = prompt('Describe what you need (optional):') || '';
+  const budget = prompt('Your budget (₦):');
+  if (!budget || isNaN(parseFloat(budget))) { toast('Please enter a valid budget', '', 'warn'); return; }
+
+  try {
+    const { error } = await db.from('service_bookings').insert({
+      service_id:   gigId,
+      buyer_id:     currentUser.id,
+      provider_id:  providerId,
+      message:      validateInput(message),
+      budget:       parseFloat(budget),
+      agreed_price: parseFloat(budget),
+      status:       'pending',
+      created_at:   new Date().toISOString()
+    });
+    if (error) throw error;
+    toast('Booking Sent! 📩', 'The service provider will review your request', 'success', 5000);
+    closeModal('sp-profile-modal');
+  } catch(e) {
+    toast('Booking Failed', e.message, 'error');
   }
 }
 
