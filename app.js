@@ -1311,12 +1311,18 @@ async function loadSellerStats() {
   badge.textContent = pending; badge.classList.toggle('hidden', !pending);
 }
 
+// Advanced chart system
+let _chartInstances = {};
+let _dashboardCharts = {};
+
 async function renderChart() {
   if (!currentUser) return;
   const days = parseInt(document.getElementById('chart-period').value);
   const since = new Date(); since.setDate(since.getDate() - days);
+  const chartType = document.getElementById('chart-type')?.value || 'line';
+  
   const { data: orders } = await db.from('orders')
-    .select('total_amount,created_at,status')
+    .select('total_amount,created_at,status,items')
     .eq('seller_id', currentUser.id)
     .gte('created_at', since.toISOString())
     .neq('status','cancelled');
@@ -1325,25 +1331,310 @@ async function renderChart() {
   const dayMap = {};
   for (let i = days-1; i >= 0; i--) {
     const d = new Date(); d.setDate(d.getDate()-i);
-    dayMap[d.toISOString().slice(0,10)] = 0;
+    dayMap[d.toISOString().slice(0,10)] = { revenue: 0, orders: 0 };
   }
   (orders||[]).forEach(o => {
     const key = o.created_at?.slice(0,10);
-    if (key && dayMap[key] !== undefined) dayMap[key] += o.total_amount || 0;
+    if (key && dayMap[key] !== undefined) {
+      dayMap[key].orders++;
+      dayMap[key].revenue += o.total_amount || 0;
+    }
   });
+  
   const labels = Object.keys(dayMap).map(k => {
     const d = new Date(k);
     return d.toLocaleDateString('en-NG',{month:'short',day:'numeric'});
   });
-  const data = Object.values(dayMap);
+  const revenueData = Object.values(dayMap).map(d => d.revenue);
+  const ordersData = Object.values(dayMap).map(d => d.orders);
 
   const ctx = document.getElementById('sales-chart').getContext('2d');
-  if (salesChart) salesChart.destroy();
-  salesChart = new Chart(ctx, {
-    type: 'line',
-    data: { labels, datasets: [{ label: 'Revenue (₦)', data, borderColor: '#19a847', backgroundColor: 'rgba(25,168,71,.08)', tension: 0.4, fill: true, pointBackgroundColor: '#19a847', pointRadius: 3 }] },
-    options: { responsive: true, plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => '₦' + fmtNum(ctx.raw) } } }, scales: { y: { beginAtZero: true, ticks: { callback: v => '₦'+fmtNum(v) } }, x: { ticks: { maxTicksLimit: days>14?7:days } } } }
+  if (_chartInstances.main) _chartInstances.main.destroy();
+  
+  const datasets = chartType === 'bar' ? [
+    { type: 'bar', label: 'Revenue (₦)', data: revenueData, backgroundColor: 'rgba(25,168,71,0.7)', borderColor: '#19a847', borderWidth: 1, yAxisID: 'y' },
+    { type: 'line', label: 'Orders', data: ordersData, borderColor: '#7c3aed', backgroundColor: 'rgba(124,58,237,0.1)', tension: 0.4, fill: true, yAxisID: 'y1' }
+  ] : [{
+    label: 'Revenue (₦)', data: revenueData, borderColor: '#19a847', backgroundColor: 'rgba(25,168,71,.08)', tension: 0.4, fill: true, pointBackgroundColor: '#19a847', pointRadius: 4, pointHoverRadius: 6
+  }];
+  
+  _chartInstances.main = new Chart(ctx, {
+    type: chartType,
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: true, position: 'top', labels: { usePointStyle: true, padding: 20 } },
+        tooltip: {
+          backgroundColor: 'rgba(11,31,20,0.95)',
+          titleColor: '#fff',
+          bodyColor: '#fff',
+          padding: 12,
+          cornerRadius: 8,
+          callbacks: {
+            label: ctx => ctx.dataset.label + ': ₦' + fmtNum(ctx.raw)
+          }
+        }
+      },
+      scales: {
+        y: { beginAtZero: true, position: 'left', grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: v => '₦'+fmtNum(v) } },
+        y1: { beginAtZero: true, position: 'right', grid: { display: false }, ticks: { color: '#7c3aed' } },
+        x: { grid: { display: false }, ticks: { maxTicksLimit: days>14?7:days } }
+      }
+    }
   });
+  
+  // Auto-refresh every 30 sec
+  if (_chartInstances.refresh) clearInterval(_chartInstances.refresh);
+  _chartInstances.refresh = setInterval(renderChart, 30000);
+}
+
+// Product performance chart
+async function renderProductChart() {
+  if (!currentUser) return;
+  const { data: products } = await db.from('products')
+    .select('name,price,views,sold_count,created_at')
+    .eq('seller_id', currentUser.id)
+    .order('sold_count', { ascending: false })
+    .limit(10);
+  
+  if (!products?.length) return;
+  
+  const ctx = document.getElementById('product-chart')?.getContext('2d');
+  if (!ctx) return;
+  if (_chartInstances.products) _chartInstances.products.destroy();
+  
+  _chartInstances.products = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: products.map(p => p.name?.substring(0,15) + '...'),
+      datasets: [{
+        label: 'Units Sold',
+        data: products.map(p => p.sold_count || 0),
+        backgroundColor: ['#19a847','#7c3aed','#ea580c','#0d9488','#0284c7','#c026d3','#dc2626','#65a30d','#4f46e5','#0891b2'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true }, y: { grid: { display: false } } }
+    }
+  });
+}
+
+// Revenue by category chart
+async function renderCategoryChart() {
+  if (!currentUser) return;
+  const { data: orders } = await db.from('orders')
+    .select('items')
+    .eq('seller_id', currentUser.id)
+    .neq('status','cancelled');
+  
+  const catMap = {};
+  (orders||[]).forEach(o => {
+    try {
+      const items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items;
+      (items||[]).forEach(item => {
+        const cat = item.category || 'Other';
+        catMap[cat] = (catMap[cat] || 0) + (item.price || 0) * (item.qty || 1);
+      });
+    } catch(e) {}
+  });
+  
+  const ctx = document.getElementById('category-chart')?.getContext('2d');
+  if (!ctx) return;
+  if (_chartInstances.category) _chartInstances.category.destroy();
+  
+  const colors = ['#19a847','#7c3aed','#ea580c','#0d9488','#0284c7'];
+  _chartInstances.category = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(catMap),
+      datasets: [{
+        data: Object.values(catMap),
+        backgroundColor: colors.slice(0, Object.keys(catMap).length),
+        borderWidth: 0
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'right' } }
+    }
+  });
+}
+
+// Real-time analytics summary
+async function loadRealTimeAnalytics() {
+  if (!currentUser) return;
+  try {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    
+    // Today's stats
+    const { data: todayOrders } = await db.from('orders')
+      .select('total_amount')
+      .eq('seller_id', currentUser.id)
+      .gte('created_at', todayStart)
+      .neq('status','cancelled');
+    
+    // This month's stats
+    const { data: monthOrders } = await db.from('orders')
+      .select('total_amount,status')
+      .eq('seller_id', currentUser.id)
+      .gte('created_at', monthStart);
+    
+    // Products
+    const { data: products } = await db.from('products')
+      .select('views,sold_count')
+      .eq('seller_id', currentUser.id);
+    
+    // Calculate metrics
+    const todayRevenue = (todayOrders||[]).reduce((s,o) => s + (o.total_amount||0), 0);
+    const monthRevenue = (monthOrders||[]).reduce((s,o) => s + (o.total_amount||0), 0);
+    const monthOrdersCount = (monthOrders||[]).length;
+    const pendingOrders = (monthOrders||[]).filter(o => o.status === 'pending').length;
+    const totalViews = (products||[]).reduce((s,p) => s + (p.views||0), 0);
+    const totalSold = (products||[]).reduce((s,p) => s + (p.sold_count||0), 0);
+    
+    // Update UI
+    const updateEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    updateEl('st-today-revenue', fmtN(todayRevenue));
+    updateEl('st-month-revenue', fmtN(monthRevenue));
+    updateEl('st-orders-count', monthOrdersCount);
+    updateEl('st-pending-count', pendingOrders);
+    updateEl('st-total-views', totalViews);
+    updateEl('st-conversion-rate', totalViews > 0 ? ((totalSold/totalViews)*100).toFixed(1) + '%' : '0%');
+  } catch(e) { console.error('Real-time analytics error:', e); }
+}
+
+// Load all charts at once
+function loadAllCharts() {
+  renderChart();
+  renderProductChart();
+  renderCategoryChart();
+  loadRealTimeAnalytics();
+}
+
+async function loadSellerAnalytics() {
+  const container = document.getElementById('seller-analytics-content');
+  if (!container || !currentUser) return;
+  container.innerHTML = '<div class="skeleton" style="height:100px"></div>';
+
+  try {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const last30Days = new Date(); last30Days.setDate(last30Days.getDate() - 30);
+    
+    // Fetch all data
+    const [ordersResult, productsResult, reviewsResult] = await Promise.all([
+      db.from('orders').select('id,total_amount,status,created_at,items').eq('seller_id', currentUser.id).gte('created_at', monthStart),
+      db.from('products').select('id,name,price,views,sold_count,category').eq('seller_id', currentUser.id),
+      db.from('reviews').select('rating').eq('seller_id', currentUser.id)
+    ]);
+    
+    const orders = ordersResult.data || [];
+    const products = productsResult.data || [];
+    const reviews = reviewsResult.data || [];
+    
+    // Calculate metrics
+    const totalViews = products.reduce((s,p) => s + (p.views||0), 0);
+    const totalOrders = orders.length;
+    const totalRevenue = orders.reduce((s,o) => s + (o.total_amount||0), 0);
+    const avgRating = reviews.length ? (reviews.reduce((s,r) => s + r.rating, 0) / reviews.length).toFixed(1) : '0.0';
+    const conversionRate = totalViews > 0 ? ((totalOrders / totalViews) * 100).toFixed(1) : '0.0';
+    const pendingOrders = orders.filter(o => o.status === 'pending').length;
+    
+    // Top products
+    const topProducts = [...products].sort((a,b) => (b.sold_count||0) - (a.sold_count||0)).slice(0, 5);
+    
+    // Category breakdown
+    const catMap = {};
+    products.forEach(p => { catMap[p.category] = (catMap[p.category] || 0) + (p.sold_count||0); });
+    const topCategories = Object.entries(catMap).sort((a,b) => b[1] - a[1]).slice(0,5);
+    
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Today's Revenue</div>
+          <div style="font-size:1.3rem;font-weight:800;color:var(--green)" id="st-today-revenue">₦0</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">This Month</div>
+          <div style="font-size:1.3rem;font-weight:800;color:var(--purple)" id="st-month-revenue">₦0</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Total Orders</div>
+          <div style="font-size:1.3rem;font-weight:800" id="st-orders-count">0</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Pending</div>
+          <div style="font-size:1.3rem;font-weight:800;color:var(--gold)" id="st-pending-count">0</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Total Views</div>
+          <div style="font-size:1.3rem;font-weight:800;color:var(--blue)" id="st-total-views">0</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">Conversion</div>
+          <div style="font-size:1.3rem;font-weight:800" id="st-conversion-rate">0%</div>
+        </div>
+      </div>
+      
+      <div class="card card-pad mb-3">
+        <h3 class="mb-3"><i class="fa-solid fa-chart-line color-green"></i> Revenue & Orders Trend</h3>
+        <div style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+          <select id="chart-type" class="form-select" style="width:auto;padding:.35rem .65rem;font-size:.75rem" onchange="renderChart()">
+            <option value="line">Line</option>
+            <option value="bar">Bar</option>
+            <option value="area">Area</option>
+          </select>
+          <button class="btn btn-outline btn-sm" onclick="renderChart()"><i class="fa-solid fa-sync"></i> Refresh</button>
+        </div>
+        <div style="height:280px;position:relative">
+          <canvas id="sales-chart"></canvas>
+        </div>
+      </div>
+      
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1rem">
+        <div class="card card-pad">
+          <h3 class="mb-3"><i class="fa-solid fa-fire color-gold"></i> Top Products by Sales</h3>
+          <div style="height:220px">
+            <canvas id="product-chart"></canvas>
+          </div>
+        </div>
+        <div class="card card-pad">
+          <h3 class="mb-3"><i class="fa-solid fa-chart-pie color-purple"></i> Revenue by Category</h3>
+          <div style="height:220px">
+            <canvas id="category-chart"></canvas>
+          </div>
+        </div>
+      </div>
+      
+      ${renderSellerBadge(totalOrders, parseFloat(avgRating))}
+      <div class="card card-pad mt-3">
+        <h3 class="mb-3"><i class="fa-solid fa-trophy color-gold"></i> Top Products</h3>
+        ${topProducts.length ? topProducts.map((p, i) => `
+          <div class="flex justify-between items-center py-2 ${i<topProducts.length-1?'border-b border-border':''}">
+            <div class="flex items-center gap-2">
+              <span style="font-weight:700;color:var(--text3);width:20px">${i+1}.</span>
+              <div>
+                <div class="text-sm font-600">${escHtml(p.name?.substring(0,25))}</div>
+                <div class="text-xs color-text3">${fmtN(p.price)} · ${p.views||0} views</div>
+              </div>
+            </div>
+            <div class="font-bold color-green">${p.sold_count||0} sold</div>
+          </div>
+        `).join('') : '<p class="color-text3 text-sm">No product data yet.</p>'}
+      </div>`;
+    
+    // Load charts after rendering
+    setTimeout(loadAllCharts, 100);
+  } catch(e) { console.error('Analytics error:', e); }
 }
 
 // ====================================================
@@ -2019,6 +2310,7 @@ async function loadAdminOverview() {
 
   // Revenue bar chart
   _renderAdminRevenueChart(orders || []);
+  _renderAdminOrdersChart(orders || []);
 }
 
    // ====================================================
@@ -2093,47 +2385,73 @@ ${expiredSPs.map(s => `  - SVC_PROVIDER: ${s.name} (${s.email}) ID:${s.id.substr
     dbContext = '\n[Database read failed – using cached stats only]';
   }
 
-  const systemPrompt = `You are the elite Chief Operating Officer (COO) AI for BUYSELL Nigeria marketplace.
-You have FULL READ ACCESS to the live database and can execute administrative actions.
+  const systemPrompt = `You are BUYSELL AI — the elite Chief Operating Officer for Nigeria's leading marketplace platform.
 
-Platform stats — Sellers: ${document.getElementById('adm-total-sellers')?.textContent || '?'}, 
-Buyers: ${document.getElementById('adm-total-buyers')?.textContent || '?'}, 
-Revenue: ${document.getElementById('adm-revenue')?.textContent || '?'}, 
-Open Disputes: ${document.getElementById('adm-disputes')?.textContent || '?'}.
+🎯 YOUR ROLE:
+You are a proactive, data-driven admin assistant. Analyze platform health, suggest optimizations, and execute actions when needed.
+
+📊 AVAILABLE DATA:
+You have live access to: disputes, sellers, service providers, orders, revenue, products, reviews, KYC, withdrawals, receipts.
+
+⚡ POWERFUL ACTIONS (include EXACT token in response):
+1. [ACTION: SUSPEND_UNPAID_SELLERS] — Suspend sellers with expired unpaid trials
+2. [ACTION: SUSPEND_UNPAID_PROVIDERS] — Suspend service providers with expired trials
+3. [ACTION: DEACTIVATE_USER:uuid] — Suspend any user by ID
+4. [ACTION: RESOLVE_DISPUTE:dispute_id] — Close dispute with resolution
+5. [ACTION: APPROVE_RECEIPT:receipt_id] — Approve commission payment
+6. [ACTION: REJECT_RECEIPT:receipt_id:reason] — Reject receipt with reason
+7. [ACTION: APPROVE_WITHDRAWAL:withdrawal_id] — Approve payout request
+8. [ACTION: APPROVE_KYC:kyc_id] — Approve identity verification
+9. [ACTION: REJECT_KYC:kyc_id:reason] — Reject KYC with reason
+10. [ACTION: BROADCAST:title:message] — Send platform-wide notification
+11. [ACTION: EXPORT_REPORT:type] — Generate report (sellers/orders/revenue)
+12. [ACTION: CREATE_COUPON:code:percent:days] — Create promo coupon
+13. [ACTION: REFRESH_DATA] — Reload dashboard stats
+
+📈 INSIGHTS TO PROVIDE:
+• Revenue trends & forecasts
+• Top performing sellers/products
+• At-risk accounts (expiring trials, low ratings)
+• Dispute patterns & resolution times
+• User growth metrics
+• Conversion funnel analysis
+
+🎨 RESPONSE STYLE:
+• Use emoji liberally for visual hierarchy
+• Present stats in clean bullet format
+• Include specific names & numbers
+• Be proactive — suggest actions, don't just answer
+• For suspensions: cite specific reasons (days overdue, unresolved disputes, etc.)
+• End with clear recommendation or question
+• Use tables for comparisons
+
+⚖️ DECISION FRAMEWORK:
+• For disputes: Summarize issue → Review evidence → Suggest resolution
+• For sellers: Tier + sales + rating → Keep/Pause/Remove
+• For revenue: Current vs previous period → Trend → Recommendation
+
 ${dbContext}
 
-=== YOUR POWERS ===
-You can perform these actions by including the EXACT token in your reply:
-1. [ACTION: SUSPEND_UNPAID_SELLERS] — Deactivate all sellers with expired trials who haven't paid
-2. [ACTION: SUSPEND_UNPAID_PROVIDERS] — Deactivate all service providers with expired trials who haven't paid  
-3. [ACTION: DEACTIVATE_USER:user_uuid_here] — Suspend a specific user by their UUID
-4. [ACTION: RESOLVE_DISPUTE:dispute_id_here] — Resolve a specific dispute
-5. [ACTION: APPROVE_RECEIPT:receipt_id_here] — Approve a pending commission receipt
-6. [ACTION: REFRESH_DATA] — Reload all admin dashboard data
-
-=== RULES ===
-- Always summarize what action you're taking and WHY before including the action token.
-- For destructive actions (suspensions/deactivations), explain the reason clearly.
-- When reading disputes, provide a clear summary with recommendations.
-- When analyzing sellers, flag those with recurring complaints.
-- Be proactive: if you see concerning patterns, alert the admin.
-- Be direct, data-driven, and professional. Use bullet points for clarity.
-- Reference specific user names and IDs when discussing individual cases.`;
+REMEMBER: You're the expert. Proactively identify issues, suggest fixes, and act when appropriate.`;
 
   try {
     const reply = await callGroq(adminAiHistory, systemPrompt);
     let finalReply = reply;
 
-    // ── PARSE AND EXECUTE ACTIONS ──
+    // ── ADVANCED ACTION PARSER ──
+    let actionLog = [];
+    
     // 1. Suspend unpaid sellers
     if (finalReply.includes('[ACTION: SUSPEND_UNPAID_SELLERS]')) {
       finalReply = finalReply.replace('[ACTION: SUSPEND_UNPAID_SELLERS]', '⚡ Executing seller suspension...').trim();
       executeMassSuspension();
+      actionLog.push('Suspended unpaid sellers');
     }
     // 2. Suspend unpaid service providers
     if (finalReply.includes('[ACTION: SUSPEND_UNPAID_PROVIDERS]')) {
       finalReply = finalReply.replace('[ACTION: SUSPEND_UNPAID_PROVIDERS]', '⚡ Executing provider suspension...').trim();
       executeMassProviderSuspension();
+      actionLog.push('Suspended unpaid providers');
     }
     // 3. Deactivate specific user
     const deactivateMatch = finalReply.match(/\[ACTION: DEACTIVATE_USER:([a-f0-9-]+)\]/i);
@@ -2141,6 +2459,7 @@ You can perform these actions by including the EXACT token in your reply:
       const targetId = deactivateMatch[1];
       finalReply = finalReply.replace(deactivateMatch[0], `⚡ Deactivating user ${targetId.substring(0,8)}...`);
       await adminAiDeactivateUser(targetId);
+      actionLog.push(`Deactivated user ${targetId.substring(0,8)}`);
     }
     // 4. Resolve dispute
     const resolveMatch = finalReply.match(/\[ACTION: RESOLVE_DISPUTE:([a-f0-9-]+)\]/i);
@@ -2148,6 +2467,7 @@ You can perform these actions by including the EXACT token in your reply:
       const disputeId = resolveMatch[1];
       finalReply = finalReply.replace(resolveMatch[0], `✅ Resolving dispute ${disputeId.substring(0,8)}...`);
       await adminAiResolveDispute(disputeId);
+      actionLog.push(`Resolved dispute ${disputeId.substring(0,8)}`);
     }
     // 5. Approve receipt
     const approveMatch = finalReply.match(/\[ACTION: APPROVE_RECEIPT:([a-f0-9-]+)\]/i);
@@ -2155,11 +2475,74 @@ You can perform these actions by including the EXACT token in your reply:
       const receiptId = approveMatch[1];
       finalReply = finalReply.replace(approveMatch[0], `✅ Approving receipt ${receiptId.substring(0,8)}...`);
       await adminAiApproveReceipt(receiptId);
+      actionLog.push(`Approved receipt ${receiptId.substring(0,8)}`);
     }
-    // 6. Refresh data
+    // 6. Reject receipt
+    const rejectMatch = finalReply.match(/\[ACTION: REJECT_RECEIPT:([a-f0-9-]+):(.+)\]/i);
+    if (rejectMatch) {
+      const [_, receiptId, reason] = rejectMatch;
+      finalReply = finalReply.replace(rejectMatch[0], `❌ Rejecting receipt ${receiptId.substring(0,8)}...`);
+      await adminAiRejectReceipt(receiptId, reason);
+      actionLog.push(`Rejected receipt ${receiptId.substring(0,8)}`);
+    }
+    // 7. Approve withdrawal
+    const wdMatch = finalReply.match(/\[ACTION: APPROVE_WITHDRAWAL:([a-f0-9-]+)\]/i);
+    if (wdMatch) {
+      const wdId = wdMatch[1];
+      finalReply = finalReply.replace(wdMatch[0], `✅ Approving withdrawal ${wdId.substring(0,8)}...`);
+      await adminAiApproveWithdrawal(wdId);
+      actionLog.push(`Approved withdrawal ${wdId.substring(0,8)}`);
+    }
+    // 8. Approve KYC
+    const kycMatch = finalReply.match(/\[ACTION: APPROVE_KYC:([a-f0-9-]+)\]/i);
+    if (kycMatch) {
+      const kycId = kycMatch[1];
+      finalReply = finalReply.replace(kycMatch[0], `✅ Approving KYC ${kycId.substring(0,8)}...`);
+      await adminAiApproveKyc(kycId);
+      actionLog.push(`Approved KYC ${kycId.substring(0,8)}`);
+    }
+    // 9. Reject KYC
+    const kycRejectMatch = finalReply.match(/\[ACTION: REJECT_KYC:([a-f0-9-]+):(.+)\]/i);
+    if (kycRejectMatch) {
+      const [_, kycId, reason] = kycRejectMatch;
+      finalReply = finalReply.replace(kycRejectMatch[0], `❌ Rejecting KYC ${kycId.substring(0,8)}...`);
+      await adminAiRejectKyc(kycId, reason);
+      actionLog.push(`Rejected KYC ${kycId.substring(0,8)}`);
+    }
+    // 10. Broadcast
+    const bcMatch = finalReply.match(/\[ACTION: BROADCAST:(.+):(.+)\]/i);
+    if (bcMatch) {
+      const [_, title, message] = bcMatch;
+      finalReply = finalReply.replace(bcMatch[0], `📣 Sending broadcast: ${title}...`);
+      await sendBroadcastMessage(title, message);
+      actionLog.push(`Broadcast: ${title}`);
+    }
+    // 11. Create coupon
+    const couponMatch = finalReply.match(/\[ACTION: CREATE_COUPON:([A-Z0-9]+):(\d+):(\d+)\]/i);
+    if (couponMatch) {
+      const [_, code, percent, days] = couponMatch;
+      finalReply = finalReply.replace(couponMatch[0], `🎟️ Creating coupon ${code}...`);
+      await adminAiCreateCoupon(code, parseInt(percent), parseInt(days));
+      actionLog.push(`Created coupon ${code}`);
+    }
+    // 12. Export report
+    const exportMatch = finalReply.match(/\[ACTION: EXPORT_REPORT:(sellers|orders|revenue|disputes)\]/i);
+    if (exportMatch) {
+      const reportType = exportMatch[1];
+      finalReply = finalReply.replace(exportMatch[0], `📊 Generating ${reportType} report...`);
+      exportAdminReport(reportType);
+      actionLog.push(`Generated ${reportType} report`);
+    }
+    // 13. Refresh data
     if (finalReply.includes('[ACTION: REFRESH_DATA]')) {
       finalReply = finalReply.replace('[ACTION: REFRESH_DATA]', '🔄 Refreshing dashboard...');
       loadAdminOverview();
+      actionLog.push('Refreshed dashboard');
+    }
+    
+    // Add action summary if any actions taken
+    if (actionLog.length > 0) {
+      finalReply += '<br><br><em style="color:var(--green)">✓ Actions completed: ' + actionLog.join(', ') + '</em>';
     }
 
     adminAiHistory.push({ role: 'assistant', content: finalReply });
@@ -2269,6 +2652,98 @@ async function adminAiApproveReceipt(receiptId) {
     await db.from('commission_receipts').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', receiptId);
     toast('Receipt Approved', 'Seller activated by AI', 'success');
     loadAdminReceipts();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiRejectReceipt(receiptId, reason) {
+  try {
+    await db.from('commission_receipts').update({ status: 'rejected', reviewed_at: new Date().toISOString(), rejection_reason: reason }).eq('id', receiptId);
+    toast('Receipt Rejected', reason, 'warn');
+    loadAdminReceipts();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiApproveWithdrawal(withdrawalId) {
+  try {
+    await db.from('withdrawals').update({ status: 'approved', processed_at: new Date().toISOString() }).eq('id', withdrawalId);
+    toast('Withdrawal Approved', 'Funds released', 'success');
+    loadAdminWithdrawals();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiApproveKyc(kycId) {
+  try {
+    await db.from('kyc_submissions').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', kycId);
+    await db.from('profiles').update({ kyc_verified: true }).eq('id', kycId);
+    toast('KYC Approved', 'User verified', 'success');
+    loadAdminKyc();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiRejectKyc(kycId, reason) {
+  try {
+    await db.from('kyc_submissions').update({ status: 'rejected', reviewed_at: new Date().toISOString(), rejection_reason: reason }).eq('id', kycId);
+    toast('KYC Rejected', reason, 'warn');
+    loadAdminKyc();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function sendBroadcastMessage(title, message) {
+  try {
+    await db.from('broadcasts').insert({
+      title: title,
+      message: message,
+      target: 'all',
+      created_at: new Date().toISOString()
+    });
+    toast('Broadcast Sent!', title, 'success');
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function adminAiCreateCoupon(code, percent, daysValid) {
+  try {
+    const expires = new Date(); expires.setDate(expires.getDate() + daysValid);
+    await db.from('coupons').insert({
+      seller_id: currentUser.id,
+      code: code,
+      discount_type: 'percent',
+      discount_value: percent,
+      min_order: 0,
+      max_uses: 100,
+      expires_at: expires.toISOString(),
+      is_active: true
+    });
+    toast('Coupon Created!', `${code} - ${percent}% off`, 'success');
+    loadSellerCoupons();
+  } catch(e) {
+    toast('Failed', e.message, 'error');
+  }
+}
+
+async function sendBroadcast() {
+  const target = document.getElementById('bc-target')?.value || 'all';
+  const title = document.getElementById('bc-title')?.value.trim();
+  const body = document.getElementById('bc-body')?.value.trim();
+  if (!title || !body) { toast('Fill all fields', '', 'warn'); return; }
+  try {
+    await db.from('broadcasts').insert({
+      target, title, message: body,
+      created_at: new Date().toISOString()
+    });
+    toast('Broadcast Sent!', title, 'success');
+    ['bc-title','bc-body'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   } catch(e) {
     toast('Failed', e.message, 'error');
   }
@@ -5170,7 +5645,752 @@ async function addTrackingUpdate(orderId) {
 // ════════════════════════════════════════════════════════════
 //  FEATURE 9: ADMIN REPORT EXPORT (CSV / PDF)
 // ════════════════════════════════════════════════════════════
-async function exportAdminReport(type) {
+async 
+// ====================================================
+//  VOICE INPUT FOR AI
+// ====================================================
+let mediaRecorder = null;
+let audioChunks = [];
+
+async function toggleVoiceInput() {
+  const btn = document.getElementById('voice-btn');
+  const rec = document.getElementById('voice-recording');
+  
+  if (rec.classList.contains('hidden')) {
+    // Start recording
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      audioChunks = [];
+      
+      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        transcribeAudio(audioBlob);
+      };
+      
+      mediaRecorder.start();
+      rec.classList.remove('hidden');
+      btn.style.background = 'var(--red)';
+      
+      // Auto-stop after 30 seconds
+      setTimeout(() => {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+          mediaRecorder.stop();
+          rec.classList.add('hidden');
+          btn.style.background = 'var(--forest)';
+        }
+      }, 30000);
+    } catch(e) {
+      toast('Mic Error', 'Could not access microphone', 'error');
+    }
+  } else {
+    // Stop recording
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    }
+    rec.classList.add('hidden');
+    btn.style.background = 'var(--forest)';
+  }
+}
+
+async function transcribeAudio(audioBlob) {
+  toast('Processing Voice...', '', 'info', 2000);
+  
+  try {
+    // Use Web Speech API as fallback
+    const audioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(audioUrl);
+    
+    // Try Web Speech API
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-NG';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      
+      recognition.onresult = event => {
+        const transcript = event.results[0][0].text;
+        document.getElementById('admin-ai-input').value = transcript;
+        askAdminBot();
+      };
+      
+      recognition.onerror = () => {
+        toast('Speech Error', 'Try again or type', 'warn');
+      };
+      
+      recognition.start();
+    } else {
+      // Fallback: convert to text with simple message
+      toast('Voice input not supported', 'Please type your question', 'warn');
+    }
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
+}
+
+// ====================================================
+//  PREDICTIVE ANALYTICS
+// ====================================================
+let _predictionData = null;
+
+async function loadPredictiveAnalytics() {
+  if (!currentUser) return;
+  const container = document.getElementById('predictive-analytics');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:200px"></div>';
+  
+  try {
+    const now = new Date();
+    const last30Days = new Date(); last30Days.setDate(last30Days.getDate() - 30);
+    const last60Days = new Date(); last60Days.setDate(last60Days.getDate() - 60);
+    
+    // Fetch historical data
+    const [recentOrders, olderOrders, products, disputes] = await Promise.all([
+      db.from('orders').select('id,total_amount,status,created_at').gte('created_at', last30Days.toISOString()),
+      db.from('orders').select('id,total_amount,status,created_at').lte('created_at', last30Days.toISOString()).gte('created_at', last60Days.toISOString()),
+      db.from('products').select('id,name,views,sold_count,category').eq('seller_id', currentUser.id),
+      db.from('disputes').select('id,dispute_type,status').eq('status', 'open')
+    ]);
+    
+    const recentData = recentOrders.data || [];
+    const olderData = olderOrders.data || [];
+    const productsData = products.data || [];
+    
+    // Calculate metrics
+    const recentRevenue = recentData.reduce((s,o) => s + (o.total_amount||0), 0);
+    const olderRevenue = olderData.reduce((s,o) => s + (o.total_amount||0), 0);
+    const recentOrdersCount = recentData.length;
+    const olderOrdersCount = olderData.length;
+    
+    // Growth rates
+    const revenueGrowth = olderRevenue > 0 ? ((recentRevenue - olderRevenue) / olderRevenue * 100).toFixed(1) : 0;
+    const ordersGrowth = olderOrdersCount > 0 ? ((recentOrdersCount - olderOrdersCount) / olderOrdersCount * 100).toFixed(1) : 0;
+    
+    // Average order value
+    const avgOrderValue = recentOrdersCount > 0 ? recentRevenue / recentOrdersCount : 0;
+    const avgOrderValueChange = olderOrdersCount > 0 ? ((recentRevenue/recentOrdersCount) - (olderRevenue/olderOrdersCount)) / (olderRevenue/olderOrdersCount) * 100 : 0;
+    
+    // Projections (simple linear)
+    const projectedRevenue = recentRevenue * 1.2; // 20% growth assumption
+    const projectedOrders = Math.ceil(recentOrdersCount * 1.15);
+    
+    // Top products analysis
+    const topProducts = [...productsData].sort((a,b) => (b.sold_count||0) - (a.sold_count||0)).slice(0,5);
+    const slowSellers = productsData.filter(p => (p.views||0) > 100 && (p.sold_count||0) === 0).slice(0,3);
+    
+    // Risk factors
+    const riskFactors = [];
+    if (parseFloat(revenueGrowth) < 0) riskFactors.push('📉 Revenue declining');
+    if (recentData.filter(o => o.status === 'pending').length > 5) riskFactors.push('⏳ Many pending orders');
+    if (slowSellers.length > 0) riskFactors.push('📦 Slow-moving inventory');
+    if ((disputes.data||[]).length > 3) riskFactors.push('⚠️ Open disputes');
+    
+    // Store predictions
+    _predictionData = {
+      recentRevenue, olderRevenue, revenueGrowth, ordersGrowth, avgOrderValue, avgOrderValueChange,
+      projectedRevenue, projectedOrders, topProducts, slowSellers, riskFactors, recentOrdersCount, olderOrdersCount
+    };
+    
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem">
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">📈 Revenue Growth</div>
+          <div style="font-size:1.5rem;font-weight:800;color:${parseFloat(revenueGrowth) >= 0 ? 'var(--green)' : 'var(--red)'}">${revenueGrowth}%</div>
+          <div class="text-xs color-text3">vs last 30 days</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">🛒 Orders Growth</div>
+          <div style="font-size:1.5rem;font-weight:800;color:${parseFloat(ordersGrowth) >= 0 ? 'var(--green)' : 'var(--red)'}">${ordersGrowth}%</div>
+          <div class="text-xs color-text3">vs last 30 days</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">💰 Avg Order Value</div>
+          <div style="font-size:1.5rem;font-weight:800" id="p-avg-order">${fmtN(avgOrderValue)}</div>
+          <div class="text-xs color-text3">${avgOrderValueChange >= 0 ? '↑' : '↓'} ${Math.abs(avgOrderValueChange).toFixed(1)}%</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div class="text-xs color-text3 mb-1">🔮 Next 30 Days</div>
+          <div style="font-size:1.5rem;font-weight:800;color:var(--purple)">${fmtN(projectedRevenue)}</div>
+          <div class="text-xs color-text3">Projected revenue</div>
+        </div>
+      </div>
+      
+      ${riskFactors.length > 0 ? `
+      <div class="card card-pad mb-3" style="border-left:3px solid var(--red)">
+        <h3 class="mb-2"><i class="fa-solid fa-triangle-exclamation color-red"></i> Risk Alerts</h3>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          ${riskFactors.map(r => `<div style="font-size:.85rem">${r}</div>`).join('')}
+        </div>
+      </div>
+      ` : ''}
+      
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+        <div class="card card-pad">
+          <h3 class="mb-2"><i class="fa-solid fa-fire color-gold"></i> Top Performers</h3>
+          ${topProducts.length ? topProducts.map((p,i) => `
+            <div class="flex justify-between items-center py-2">
+              <div class="text-sm">${i+1}. ${escHtml(p.name?.substring(0,20))}</div>
+              <div class="font-bold color-green">${p.sold_count||0}</div>
+            </div>
+          `).join('') : '<p class="color-text3 text-sm">No sales yet</p>'}
+        </div>
+        <div class="card card-pad">
+          <h3 class="mb-2"><i class="fa-solid fa-bell color-gold"></i> Needs Attention</h3>
+          ${slowSellers.length ? slowSellers.map(p => `
+            <div class="flex justify-between items-center py-2">
+              <div class="text-sm">${escHtml(p.name?.substring(0,20))}</div>
+              <span class="badge badge-red">${p.views||0} views, 0 sales</span>
+            </div>
+          `).join('') : '<p class="color-text3 text-sm">All products selling!</p>'}
+        </div>
+      </div>
+      
+      <div class="card card-pad mt-3">
+        <h3 class="mb-2"><i class="fa-solid fa-crystal-ball color-purple"></i> AI Forecast</h3>
+        <div style="font-size:.85rem;color:var(--text2);line-height:1.7">
+          <p>Based on your last 60 days performance:</p>
+          <ul style="margin-left:1rem">
+            <li>Expected orders next 30 days: <strong>${projectedOrders}</strong></li>
+            <li>Expected revenue: <strong>${fmtN(projectedRevenue)}</strong></li>
+            <li>Recommended focus: <strong>${topProducts[0]?.name?.substring(0,15) || 'N/A'}</strong></li>
+          </ul>
+          <p class="mt-2 text-xs color-text3">* Projections are estimates based on linear growth trends.</p>
+        </div>
+      </div>`;
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading predictions</p>';
+  }
+}
+
+// ====================================================
+//  TREND ANALYSIS
+// ====================================================
+async function loadTrendAnalysis() {
+  const container = document.getElementById('trend-analysis');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:150px"></div>';
+  
+  try {
+    const now = new Date();
+    const periods = [
+      { days: 7, label: 'This Week' },
+      { days: 30, label: 'This Month' },
+      { days: 90, label: 'Last 90 Days' }
+    ];
+    
+    const data = await Promise.all(periods.map(async p => {
+      const since = new Date(); since.setDate(since.getDate() - p.days);
+      const { data: orders } = await db.from('orders')
+        .select('total_amount,status,created_at')
+        .eq('seller_id', currentUser.id)
+        .gte('created_at', since.toISOString());
+      
+      const revenue = (orders||[]).reduce((s,o) => s + (o.total_amount||0), 0);
+      const count = (orders||[]).length;
+      const avg = count > 0 ? revenue / count : 0;
+      
+      return { label: p.label, revenue, count, avg, days: p.days };
+    }));
+    
+    container.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Period</th><th>Orders</th><th>Revenue</th><th>Avg Order</th></tr></thead>
+          <tbody>
+            ${data.map(d => `
+              <tr>
+                <td>${d.label}</td>
+                <td>${d.count}</td>
+                <td class="font-bold color-green">${fmtN(d.revenue)}</td>
+                <td>${fmtN(d.avg)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading trends</p>';
+  }
+}
+
+// ====================================================
+//  CUSTOMER SEGMENTATION
+// ====================================================
+async function loadCustomerSegmentation() {
+  const container = document.getElementById('customer-segments');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:150px"></div>';
+  
+  try {
+    const { data: orders } = await db.from('orders')
+      .select('buyer_id,total_amount,created_at,items')
+      .eq('seller_id', currentUser.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    
+    // Group by buyer
+    const buyerMap = {};
+    (orders||[]).forEach(o => {
+      if (!o.buyer_id) return;
+      if (!buyerMap[o.buyer_id]) {
+        buyerMap[o.buyer_id] = { orders: 0, total: 0, lastOrder: o.created_at };
+      }
+      buyerMap[o.buyer_id].orders++;
+      buyerMap[o.buyer_id].total += o.total_amount || 0;
+      if (o.created_at > buyerMap[o.buyer_id].lastOrder) {
+        buyerMap[o.buyer_id].lastOrder = o.created_at;
+      }
+    });
+    
+    const buyers = Object.entries(buyerMap)
+      .map(([id, data]) => ({ id, ...data, avgOrder: data.total / data.orders }))
+      .sort((a,b) => b.total - a.total);
+    
+    // Segment
+    const vip = buyers.filter(b => b.total >= 100000);
+    const regular = buyers.filter(b => b.total >= 20000 && b.total < 100000);
+    const newBuyers = buyers.filter(b => b.total < 20000);
+    
+    container.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+        <div class="card card-pad" style="text-align:center">
+          <div style="font-size:1.5rem;font-weight:800;color:var(--purple)">${vip.length}</div>
+          <div class="text-xs color-text3">VIP (₦100k+)</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div style="font-size:1.5rem;font-weight:800;color:var(--green)">${regular.length}</div>
+          <div class="text-xs color-text3">Regular</div>
+        </div>
+        <div class="card card-pad" style="text-align:center">
+          <div style="font-size:1.5rem;font-weight:800;color:var(--blue)">${newBuyers.length}</div>
+          <div class="text-xs color-text3">New</div>
+        </div>
+      </div>
+      <div class="mt-3">
+        <h4 class="mb-2">Top Customers</h4>
+        ${buyers.slice(0,5).map((b,i) => `
+          <div class="flex justify-between items-center py-2 border-b border-border">
+            <div>${i+1}. ${b.id.substring(0,8)}...</div>
+            <div class="font-bold">${fmtN(b.total)} (${b.orders} orders)</div>
+          </div>
+        `).join('')}
+      </div>`;
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading segments</p>';
+  }
+}
+
+// Load all analytics
+
+// ====================================================
+//  AI PRODUCT RECOMMENDATIONS FOR BUYERS
+// ====================================================
+async function loadAIRecommendations() {
+  const container = document.getElementById('ai-recommendations');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:120px"></div>';
+  
+  try {
+    const { data: products } = await db.from('products')
+      .select('id,name,category,price,images,avg_rating,sold_count,views')
+      .eq('status', 'active')
+      .order('avg_rating', { ascending: false })
+      .limit(30);
+    
+    if (!products?.length) {
+      container.innerHTML = '<p class="color-text3">No products to analyze</p>';
+      return;
+    }
+    
+    // Score products by multiple factors
+    const scored = products.map(p => {
+      let score = 0;
+      // Rating weight (40%)
+      score += (p.avg_rating || 0) * 20;
+      // Sales weight (30%)
+      score += Math.min((p.sold_count || 0) * 3, 30);
+      // Views momentum (20%) - normalized
+      score += Math.min((p.views || 0) / 50, 20);
+      // Price value (10%) - prefer mid-range
+      const priceScore = p.price > 1000 && p.price < 100000 ? 10 : 5;
+      score += priceScore;
+      
+      return { ...p, aiScore: score };
+    });
+    
+    // Top picks by category
+    const categories = {};
+    scored.forEach(p => {
+      const cat = p.category || 'other';
+      if (!categories[cat] || p.aiScore > categories[cat].aiScore) {
+        categories[cat] = p;
+      }
+    });
+    
+    // Best value picks
+    const valuePicks = [...scored]
+      .filter(p => p.price < 50000)
+      .sort((a,b) => b.aiScore - a.aiScore)
+      .slice(0, 5);
+    
+    // Trending
+    const trending = [...scored]
+      .sort((a,b) => (b.views||0) - (a.views||0))
+      .slice(0, 5);
+    
+    container.innerHTML = `
+      <div class="card card-pad mb-3">
+        <h3 class="mb-2"><i class="fa-solid fa-robot color-purple"></i> AI Top Picks</h3>
+        <p class="text-xs color-text3 mb-3">Based on rating, sales, views & value</p>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+          ${scored.sort((a,b) => b.aiScore - a.aiScore).slice(0,5).map((p,i) => `
+            <div class="flex items-center gap-3" style="padding:.5rem;background:var(--cream);border-radius:8px">
+              <div style="font-size:1rem;font-weight:800;color:var(--purple);width:24px">${i+1}</div>
+              <img src="${(p.images&&p.images[0])||''}" style="width:48px;height:48px;border-radius:6px;object-fit:cover" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22><rect fill=%22%23f0f0f0%22 width=%221%22 height=%221%22/></svg>'">
+              <div style="flex:1;min-width:0">
+                <div class="font-600 text-sm" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}</div>
+                <div class="text-xs color-text3">${fmtN(p.price)} · ⭐ ${(p.avg_rating||0).toFixed(1)} · ${p.sold_count||0} sold</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      
+      <div class="card card-pad mb-3">
+        <h3 class="mb-2"><i class="fa-solid fa-fire color-gold"></i> Trending Now</h3>
+        <div style="display:flex;gap:.5rem;overflow-x:auto;padding:.5rem 0">
+          ${trending.map(p => `
+            <div style="min-width:120px;cursor:pointer" onclick="openProduct('${p.id}')">
+              <img src="${(p.images&&p.images[0])||''}" style="width:100%;height:80px;border-radius:8px;object-fit:cover" onerror="this.style.display='none'">
+              <div class="text-xs mt-1" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name?.substring(0,15))}</div>
+              <div class="text-xs font-bold color-green">${fmtN(p.price)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      
+      <div class="card card-pad">
+        <h3 class="mb-2"><i class="fa-solid fa-tag color-green"></i> Best Value</h3>
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          ${valuePicks.map((p,i) => `
+            <div class="flex justify-between items-center py-2" style="padding:.5rem;background:var(--green-xlt);border-radius:6px">
+              <div>
+                <div class="text-sm font-600">${escHtml(p.name?.substring(0,25))}</div>
+                <div class="text-xs color-text3">⭐ ${(p.avg_rating||0).toFixed(1)} (${p.sold_count||0} sales)</div>
+              </div>
+              <div class="font-bold" style="color:var(--green)">${fmtN(p.price)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading recommendations</p>';
+  }
+}
+
+// ====================================================
+//  COMPETITOR ANALYSIS
+// ====================================================
+async function loadCompetitorAnalysis() {
+  const container = document.getElementById('competitor-analysis');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:150px"></div>';
+  
+  try {
+    // Get all sellers
+    const { data: sellers } = await db.from('profiles')
+      .select('id,name,email,seller_tier,created_at')
+      .eq('role', 'seller')
+      .eq('commission_paid', true)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    
+    if (!sellers?.length) {
+      container.innerHTML = '<p class="color-text3">No competitor data available</p>';
+      return;
+    }
+    
+    // Get product counts for each seller
+    const sellerIds = sellers.map(s => s.id);
+    const { data: allProducts } = await db.from('products')
+      .select('id,name,category,price,seller_id,sold_count,views')
+      .in('seller_id', sellerIds)
+      .eq('status', 'active');
+    
+    // Group by seller
+    const sellerStats = {};
+    sellers.forEach(s => {
+      sellerStats[s.id] = {
+        name: s.name,
+        tier: s.seller_tier || 'bronze',
+        products: 0,
+        totalViews: 0,
+        totalSales: 0,
+        categories: {}
+      };
+    });
+    
+    (allProducts||[]).forEach(p => {
+      if (sellerStats[p.seller_id]) {
+        sellerStats[p.seller_id].products++;
+        sellerStats[p.seller_id].totalViews += p.views || 0;
+        sellerStats[p.seller_id].totalSales += p.sold_count || 0;
+        sellerStats[p.seller_id].categories[p.category] = (sellerStats[p.seller_id].categories[p.category] || 0) + 1;
+      }
+    });
+    
+    const ranked = Object.entries(sellerStats)
+      .map(([id, s]) => ({ id, ...s }))
+      .sort((a,b) => b.totalSales - a.totalSales);
+    
+    const tierColors = { verified: 'var(--green)', gold: 'var(--gold)', silver: 'var(--text2)', bronze: 'var(--text3)' };
+    
+    container.innerHTML = `
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Rank</th><th>Seller</th><th>Tier</th><th>Products</th><th>Views</th><th>Sales</th></tr></thead>
+          <tbody>
+            ${ranked.slice(0,10).map((s,i) => `
+              <tr>
+                <td>${i+1}</td>
+                <td>${escHtml(s.name?.substring(0,15))}</td>
+                <td><span class="badge" style="background:${tierColors[s.tier]}33;color:${tierColors[s.tier]}">${s.tier}</span></td>
+                <td>${s.products}</td>
+                <td>${s.totalViews.toLocaleString()}</td>
+                <td class="font-bold color-green">${s.totalSales}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="card card-pad mt-3">
+        <h4 class="mb-2">Your Position</h4>
+        <div id="your-rank-info"></div>
+      </div>`;
+    
+    // Show user's rank
+    const myRank = ranked.findIndex(s => s.id === currentUser?.id);
+    const myRankEl = document.getElementById('your-rank-info');
+    if (myRankEl && myRank >= 0) {
+      myRankEl.innerHTML = `<div class="flex justify-between items-center py-3" style="padding:1rem;background:var(--purple-xlt);border-radius:8px">
+        <div>
+          <div class="font-bold" style="font-size:1.2rem">#${myRank + 1}</div>
+          <div class="text-xs color-text3">of ${ranked.length} sellers</div>
+        </div>
+        <div class="text-right">
+          <div class="font-bold color-green">${sellerStats[currentUser?.id]?.totalSales || 0} sales</div>
+          <div class="text-xs color-text3">${sellerStats[currentUser?.id]?.totalViews || 0} views</div>
+        </div>
+      </div>`;
+    }
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading competitors</p>';
+  }
+}
+
+// ====================================================
+//  SMART NOTIFICATIONS SYSTEM
+// ====================================================
+let _notificationSettings = {
+  orderPlaced: true,
+  orderShipped: true,
+  newReview: true,
+  lowStock: true,
+  newMessage: true,
+  priceDrop: false
+};
+
+async function loadNotificationSettings() {
+  const container = document.getElementById('notification-settings');
+  if (!container) return;
+  
+  container.innerHTML = `
+    <div class="card card-pad">
+      <h3 class="mb-3"><i class="fa-solid fa-bell color-gold"></i> Notification Preferences</h3>
+      <div style="display:flex;flex-direction:column;gap:.75rem">
+        <label class="flex justify-between items-center" style="padding:.5rem;background:var(--cream);border-radius:6px">
+          <div>
+            <div class="font-600 text-sm">New Orders</div>
+            <div class="text-xs color-text3">Get notified when you receive a new order</div>
+          </div>
+          <input type="checkbox" checked onchange="_notificationSettings.orderPlaced = this.checked" style="width:20px;height:20px">
+        </label>
+        <label class="flex justify-between items-center" style="padding:.5rem;background:var(--cream);border-radius:6px">
+          <div>
+            <div class="font-600 text-sm">Order Shipped</div>
+            <div class="text-xs color-text3">Order status updates</div>
+          </div>
+          <input type="checkbox" checked onchange="_notificationSettings.orderShipped = this.checked" style="width:20px;height:20px">
+        </label>
+        <label class="flex justify-between items-center" style="padding:.5rem;background:var(--cream);border-radius:6px">
+          <div>
+            <div class="font-600 text-sm">New Reviews</div>
+            <div class="text-xs color-text3">When customers review your products</div>
+          </div>
+          <input type="checkbox" checked onchange="_notificationSettings.newReview = this.checked" style="width:20px;height:20px">
+        </label>
+        <label class="flex justify-between items-center" style="padding:.5rem;background:var(--cream);border-radius:6px">
+          <div>
+            <div class="font-600 text-sm">Low Stock Alerts</div>
+            <div class="text-xs color-text3">When inventory is running low</div>
+          </div>
+          <input type="checkbox" checked onchange="_notificationSettings.lowStock = this.checked" style="width:20px;height:20px">
+        </label>
+        <label class="flex justify-between items-center" style="padding:.5rem;background:var(--cream);border-radius:6px">
+          <div>
+            <div class="font-600 text-sm">Messages</div>
+            <div class="text-xs color-text3">New inbox messages</div>
+          </div>
+          <input type="checkbox" checked onchange="_notificationSettings.newMessage = this.checked" style="width:20px;height:20px">
+        </label>
+      </div>
+      <button class="btn btn-primary btn-full mt-3" onclick="saveNotificationSettings()"><i class="fa-solid fa-save"></i> Save Preferences</button>
+    </div>`;
+}
+
+async function saveNotificationSettings() {
+  try {
+    localStorage.setItem('bs_notification_settings', JSON.stringify(_notificationSettings));
+    toast('Settings Saved!', 'Your preferences have been updated', 'success');
+  } catch(e) {
+    toast('Error', e.message, 'error');
+  }
+}
+
+// Request notification permission
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    toast('Not Supported', 'This browser does not support notifications', 'warn');
+    return;
+  }
+  
+  if (Notification.permission === 'granted') {
+    toast('Already Enabled', 'Notifications are enabled', 'info');
+  } else if (Notification.permission !== 'denied') {
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      toast('Enabled!', 'You will receive notifications', 'success');
+    }
+  }
+}
+
+// Test notification
+function testNotification() {
+  if (Notification.permission === 'granted') {
+    new Notification('BUYSELL Nigeria', {
+      body: 'Test notification - Notifications are working!',
+      icon: 'https://buysell.ng/favicon.ico'
+    });
+  } else {
+    toast('Enable First', 'Please enable notifications in browser settings', 'warn');
+  }
+}
+
+// ====================================================
+//  PRICE INTELLIGENCE / COMPETITOR PRICING
+// ====================================================
+async function loadPriceIntelligence() {
+  const container = document.getElementById('price-intelligence');
+  if (!container) return;
+  
+  container.innerHTML = '<div class="skeleton" style="height:150px"></div>';
+  
+  try {
+    const { data: myProducts } = await db.from('products')
+      .select('id,name,category,price')
+      .eq('seller_id', currentUser.id)
+      .eq('status', 'active');
+    
+    if (!myProducts?.length) {
+      container.innerHTML = '<p class="color-text3">No products to analyze</p>';
+      return;
+    }
+    
+    // Find same-category products from other sellers
+    const categories = [...new Set(myProducts.map(p => p.category))];
+    const { data: competitorProducts } = await db.from('products')
+      .select('id,name,category,price,seller_id,profiles(name)')
+      .in('category', categories)
+      .eq('status', 'active')
+      .neq('seller_id', currentUser.id);
+    
+    // Analyze each category
+    const analysis = {};
+    categories.forEach(cat => {
+      const myProds = myProducts.filter(p => p.category === cat);
+      const compProds = competitorProducts.filter(p => p.category === cat);
+      
+      if (myProds.length && compProds.length) {
+        const myPrices = myProds.map(p => p.price).filter(p => p > 0);
+        const compPrices = compProds.map(p => p.price).filter(p => p > 0);
+        
+        analysis[cat] = {
+          myAvg: myPrices.length ? myPrices.reduce((s,p) => s + p, 0) / myPrices.length : 0,
+          compAvg: compPrices.length ? compPrices.reduce((s,p) => s + p, 0) / compPrices.length : 0,
+          myCount: myProds.length,
+          compCount: compProds.length
+        };
+      }
+    });
+    
+    container.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:1rem">
+        ${Object.entries(analysis).map(([cat, data]) => {
+          const diff = data.myAvg - data.compAvg;
+          const pct = data.compAvg > 0 ? ((diff / data.compAvg) * 100).toFixed(1) : 0;
+          const status = diff > 0 ? 'var(--red)' : diff < 0 ? 'var(--green)' : 'var(--text2)';
+          const label = diff > 0 ? 'Above' : diff < 0 ? 'Below' : 'Same';
+          
+          return `
+          <div class="card card-pad">
+            <div class="flex justify-between items-center mb-2">
+              <div class="font-bold">${escHtml(cat)}</div>
+              <span class="badge" style="background:${status}22;color:${status}">${label} market by ${Math.abs(pct)}%</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;font-size:.8rem">
+              <div>
+                <div class="text-xs color-text3">Your Avg Price</div>
+                <div class="font-bold">${fmtN(data.myAvg)}</div>
+              </div>
+              <div>
+                <div class="text-xs color-text3">Competitors Avg</div>
+                <div class="font-bold color-green">${fmtN(data.compAvg)}</div>
+              </div>
+            </div>
+            <div class="text-xs color-text3 mt-2">You: ${data.myCount} products · Competitors: ${data.compCount} products</div>
+          </div>`;
+        }).join('')}
+      </div>
+      
+      <div class="card card-pad mt-3">
+        <h4 class="mb-2">💡 Pricing Insights</h4>
+        <div style="font-size:.85rem;color:var(--text2);line-height:1.6">
+          ${Object.entries(analysis).some(([_,d]) => d.myAvg > d.compAvg) ? 
+            '<p>⚠️ Some of your prices are <strong>above</strong> market average. Consider adjusting to stay competitive.</p>' : 
+            '<p>✅ Your prices are <strong>competitive</strong> or below market average!</p>'}
+        </div>
+      </div>`;
+  } catch(e) {
+    container.innerHTML = '<p class="color-text3">Error loading price data</p>';
+  }
+}
+
+function loadAllAnalytics() {
+  loadPredictiveAnalytics();
+  loadTrendAnalysis();
+  loadCustomerSegmentation();
+}
+
+function exportAdminReport(type) {
   toast('Generating Report...', '', 'info', 2000);
   let rows = [];
   let filename = '';
@@ -5383,6 +6603,16 @@ async function loadFlashSaleProducts() {
   const { data } = await db.from('products').select('id, name').eq('seller_id', currentUser.id);
   if (!data?.length) { select.innerHTML = '<option value="">No products available</option>'; return; }
   select.innerHTML = data.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+}
+
+// Toggle password visibility
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input || !btn) return;
+  const isPassword = input.type === 'password';
+  input.type = isPassword ? 'text' : 'password';
+  btn.innerHTML = '<i class="fa-solid fa-eye' + (isPassword ? '-slash' : '') + '"></i>';
+  btn.style.color = isPassword ? 'var(--green)' : 'var(--text3)';
 }
 
 const origOnAuthSucc = onAuthSuccess;
