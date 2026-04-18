@@ -658,12 +658,27 @@ function showSellerDashboard() {
   currentRole = 'seller';
   stopCarousel();
   checkSellerCommission();
-  loadSellerStats();
-  loadSellerProds();
-  loadSellerOrders();
-  renderChart();
-  loadWithdrawalData();
-  loadAffiliateData();
+
+  // Check if seller must pay commission first
+  const p = currentUser.profile;
+  const trialEnd = p?.trial_end ? new Date(p.trial_end) : null;
+  const commPaid = p?.commission_paid;
+  const isExpired = !commPaid && (!trialEnd || trialEnd <= new Date());
+  const isAdmin = currentUser.email === ADMIN_EMAIL;
+
+  if (isExpired && !isAdmin) {
+    // LOCK: Only show commission section
+    lockSellerToCommission();
+  } else {
+    // UNLOCK: Show everything
+    unlockSellerDashboard();
+    loadSellerStats();
+    loadSellerProds();
+    loadSellerOrders();
+    renderChart();
+    loadWithdrawalData();
+    loadAffiliateData();
+  }
 }
 
 function toggleView() {
@@ -687,6 +702,12 @@ function handleNavBrand(e) {
 }
 
 function showDash(section) {
+  // Block navigation to non-commission sections when seller is locked
+  if (_sellerLocked && section !== 'commission') {
+    toast('Account Suspended', 'Pay your commission to unlock your seller dashboard', 'warn', 4000);
+    showDash('commission');
+    return;
+  }
   document.querySelectorAll('.dash-section').forEach(s => s.classList.remove('active'));
   document.querySelectorAll('.dash-nav-item').forEach(n => n.classList.remove('active'));
   const el = document.getElementById(`ds-${section}`);
@@ -2112,6 +2133,123 @@ async function loadSellerReviews() {
 }
 
 // ====================================================
+//  COMMISSION LOCKOUT SYSTEM
+// ====================================================
+let _sellerLocked = false;
+let _receiptPollTimer = null;
+
+function lockSellerToCommission() {
+  _sellerLocked = true;
+  // Dim and disable all sidebar nav items except commission
+  document.querySelectorAll('.dash-nav-item').forEach(navItem => {
+    const isCommission = navItem.textContent.toLowerCase().includes('commission');
+    if (!isCommission) {
+      navItem.style.opacity = '0.35';
+      navItem.style.pointerEvents = 'none';
+      navItem.style.position = 'relative';
+      // Add lock icon overlay if not already there
+      if (!navItem.querySelector('.nav-lock-icon')) {
+        const lock = document.createElement('i');
+        lock.className = 'fa-solid fa-lock nav-lock-icon';
+        lock.style.cssText = 'margin-left:auto;font-size:.6rem;color:var(--red);';
+        navItem.appendChild(lock);
+      }
+    } else {
+      navItem.style.opacity = '1';
+      navItem.style.pointerEvents = 'auto';
+    }
+  });
+
+  // Force-show commission section
+  showDash('commission');
+
+  // Show a persistent banner at the top of the dashboard
+  let banner = document.getElementById('comm-lock-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'comm-lock-banner';
+    banner.style.cssText = 'background:linear-gradient(135deg,#fef2f2,#fee2e2);border:1px solid #fecaca;border-radius:12px;padding:1rem 1.2rem;margin-bottom:1rem;display:flex;align-items:center;gap:.75rem;animation:fadeIn .3s ease';
+    banner.innerHTML = `
+      <div style="width:42px;height:42px;border-radius:50%;background:#ef4444;color:#fff;display:flex;align-items:center;justify-content:center;font-size:1.1rem;flex-shrink:0">
+        <i class="fa-solid fa-lock"></i>
+      </div>
+      <div style="flex:1">
+        <div style="font-weight:700;color:#991b1b;font-size:.88rem;margin-bottom:.15rem">Account Suspended – Commission Required</div>
+        <div style="font-size:.77rem;color:#b91c1c;line-height:1.4">Your trial has expired. Pay your commission below to reactivate your seller dashboard. All features will unlock immediately once payment is confirmed.</div>
+      </div>`;
+    const dashContent = document.querySelector('.dash-content') || document.querySelector('.dash-section.active');
+    if (dashContent) dashContent.prepend(banner);
+  }
+}
+
+function unlockSellerDashboard() {
+  _sellerLocked = false;
+  // Restore all sidebar nav items
+  document.querySelectorAll('.dash-nav-item').forEach(navItem => {
+    navItem.style.opacity = '1';
+    navItem.style.pointerEvents = 'auto';
+    // Remove lock icons
+    navItem.querySelectorAll('.nav-lock-icon').forEach(lock => lock.remove());
+  });
+
+  // Remove the lock banner
+  const banner = document.getElementById('comm-lock-banner');
+  if (banner) banner.remove();
+
+  // Stop polling if active
+  if (_receiptPollTimer) {
+    clearInterval(_receiptPollTimer);
+    _receiptPollTimer = null;
+  }
+}
+
+function startReceiptApprovalPolling() {
+  // Stop any existing poll
+  if (_receiptPollTimer) clearInterval(_receiptPollTimer);
+  
+  let pollCount = 0;
+  const maxPolls = 240; // 240 × 15s = 1 hour max polling
+
+  _receiptPollTimer = setInterval(async () => {
+    pollCount++;
+    if (pollCount > maxPolls || !currentUser) {
+      clearInterval(_receiptPollTimer);
+      _receiptPollTimer = null;
+      return;
+    }
+
+    try {
+      // Re-check the user's commission status from DB
+      const { data: profile } = await db.from('profiles').select('commission_paid, trial_end').eq('id', currentUser.id).single();
+      if (profile?.commission_paid) {
+        // Commission confirmed! Unlock everything
+        clearInterval(_receiptPollTimer);
+        _receiptPollTimer = null;
+        currentUser.profile.commission_paid = true;
+        if (profile.trial_end) currentUser.profile.trial_end = profile.trial_end;
+
+        unlockSellerDashboard();
+        checkSellerCommission();
+        toast('🎉 Account Activated!', 'Your seller dashboard is now fully unlocked!', 'success', 8000);
+        
+        // Load all seller data
+        loadSellerStats();
+        loadSellerProds();
+        loadSellerOrders();
+        renderChart();
+        loadWithdrawalData();
+        loadAffiliateData();
+        
+        // Navigate to overview
+        showDash('overview');
+      }
+    } catch(e) {
+      // Silently ignore poll errors
+    }
+  }, 15000); // Poll every 15 seconds
+}
+
+// ====================================================
 //  COMMISSION
 // ====================================================
 async function checkSellerCommission() {
@@ -2185,7 +2323,7 @@ async function submitCommissionReceipt() {
 
     if (insertErr) throw insertErr;
 
-    toast('Receipt Submitted! ✅', 'Admin will verify within 24hrs.', 'success', 6000);
+    toast('Receipt Submitted! ✅', 'Admin will verify shortly. Your dashboard will unlock automatically.', 'success', 6000);
     closeModal('commission-modal');
     document.getElementById('suspended-modal').classList.remove('open');
     document.body.classList.remove('modal-open');
@@ -2193,6 +2331,9 @@ async function submitCommissionReceipt() {
     // Clear form
     document.getElementById('commission-file').value = '';
     document.getElementById('commission-ref').value = '';
+
+    // Start polling for receipt approval
+    startReceiptApprovalPolling();
   } catch(e) {
     toast('Upload Failed', e.message || 'Please try again', 'error');
   }
