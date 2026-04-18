@@ -5,7 +5,7 @@ const SB_URL  = 'https://obzhlmzswthnorkiqemh.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9iemhsbXpzd3Robm9ya2lxZW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMDE2NjgsImV4cCI6MjA4ODY3NzY2OH0.5I4Ln0913h0AH5z4e64QBVx88igcIwEaM0Lz11FqDvU';
 const EDGE_URL = SB_URL + '/functions/v1';
 // ── GROQ DIRECT CALL (replaces CLAUDE_EDGE_URL / edge function) ──────────────
-const GROQ_API_KEY = "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";
+const GROQ_API_KEY = "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";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL   = "llama-3.3-70b-versatile";
 
@@ -113,7 +113,9 @@ if ('serviceWorker' in navigator) {
   const sw = `data:application/javascript,self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))});self.addEventListener('install',()=>self.skipWaiting());`;
   navigator.serviceWorker.register(sw).catch(()=>{});
 }
-const manifest = {name:'BUYSELL Nigeria',short_name:'BUYSELL',start_url: window.location.origin + '/','display':'standalone',theme_color:'#0b1f14',background_color:'#fdf8ef',icons:[{src:'https://via.placeholder.com/192x192/0b1f14/ffffff?text=B',sizes:'192x192',type:'image/png'}]};
+const _iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192"><rect fill="#0b1f14" width="192" height="192" rx="24"/><text x="96" y="130" font-family="Arial,sans-serif" font-size="120" font-weight="bold" fill="#fff" text-anchor="middle">B</text></svg>`;
+const _iconUrl = 'data:image/svg+xml;base64,' + btoa(_iconSvg);
+const manifest = {name:'BUYSELL Nigeria',short_name:'BUYSELL',start_url: window.location.origin + '/','display':'standalone',theme_color:'#0b1f14',background_color:'#fdf8ef',icons:[{src:_iconUrl,sizes:'192x192',type:'image/svg+xml'}]};
 const mBlob = new Blob([JSON.stringify(manifest)],{type:'application/json'});
 const mUrl = URL.createObjectURL(mBlob);
 const mLink = document.createElement('link');
@@ -323,7 +325,9 @@ async function handleAuth(e) {
 async function upsertProfile(user, meta) {
   if (!user?.id) return;
   const trialEnd = new Date(); trialEnd.setDate(trialEnd.getDate() + 30);
-  const { error } = await db.from('profiles').upsert({
+  // Check if user was referred
+  const referredBy = localStorage.getItem('bs_ref') || sessionStorage.getItem('referred_by') || '';
+  const profileData = {
     id:              user.id,
     name:            meta.name     || user.user_metadata?.name     || 'User',
     email:           user.email,
@@ -333,8 +337,14 @@ async function upsertProfile(user, meta) {
     trial_end:       trialEnd.toISOString(),
     commission_paid: false,
     referral_code:   'ref_' + Math.random().toString(36).substr(2, 8)
-  }, { onConflict: 'id', ignoreDuplicates: false });
+  };
+  if (referredBy) profileData.referred_by = referredBy;
+  const { error } = await db.from('profiles').upsert(profileData, { onConflict: 'id', ignoreDuplicates: false });
   if (error) console.warn('upsertProfile error:', error.message);
+  // Track referral if this is a new signup
+  if (referredBy) {
+    trackReferralSignup(user.id, referredBy);
+  }
 }
 
 async function onAuthSuccess(user) {
@@ -2441,27 +2451,126 @@ async function importDropship(name, cost, price, emoji) {
 // ====================================================
 //  AFFILIATE
 // ====================================================
-function copyRef() {
-  const link = document.getElementById('referral-link').value;
-  navigator.clipboard.writeText(link).then(()=>toast('Referral Link Copied!','Share to earn ₦500 per referral','success'));
+const REFERRAL_REWARD = 500; // ₦500 per referral
+
+function copyReferralLink() {
+  const linkInput = document.getElementById('referral-link');
+  if (!linkInput || !linkInput.value) return;
+  navigator.clipboard.writeText(linkInput.value).then(() => {
+    toast('Referral Link Copied! 📎', 'Share to earn ₦500 per referral', 'success');
+  }).catch(() => {
+    // Fallback for non-HTTPS
+    linkInput.select();
+    document.execCommand('copy');
+    toast('Referral Link Copied! 📎', 'Share to earn ₦500 per referral', 'success');
+  });
 }
+// Alias for old onclick references
+function copyRef() { copyReferralLink(); }
 
 async function loadAffiliateData() {
   if (!currentUser) return;
-  const rc = currentUser.profile?.referral_code || 'ref_' + currentUser.id?.substr(0,8);
-  document.getElementById('referral-link').value = `https://buysell.ng/ref/${rc}`;
-  // Load referral earnings from DB
-  const { data: refs } = await db.from('referrals').select('*').eq('referrer_id', currentUser.id);
-  const earned = (refs||[]).filter(r=>r.paid).reduce((s,r)=>s+(r.amount||500),0);
-  const pending = (refs||[]).filter(r=>!r.paid).reduce((s,r)=>s+(r.amount||500),0);
-  document.getElementById('aff-total').textContent = fmtN(earned);
-  document.getElementById('aff-pending').textContent = fmtN(pending);
-  document.getElementById('aff-clicks').textContent = (refs||[]).length * 3 + Math.floor(Math.random()*5);
-  document.getElementById('aff-conversions').textContent = (refs||[]).length;
-  // Earnings table
-  const tbody = document.getElementById('aff-table-body');
-  if (!refs?.length) { tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)">No earnings yet. Share your referral link!</td></tr>'; return; }
-  tbody.innerHTML = refs.map(r=>`<tr><td>${fmtDate(r.created_at)}</td><td>Referral Signup</td><td>Direct Link</td><td class="font-bold color-green">${fmtN(r.amount||500)}</td><td><span class="badge ${r.paid?'badge-green':'badge-gold'}">${r.paid?'Paid':'Pending'}</span></td></tr>`).join('');
+  // Build the real referral URL using current page URL
+  const rc = currentUser.profile?.referral_code || currentUser.id;
+  const baseUrl = window.location.origin + window.location.pathname;
+  const referralUrl = `${baseUrl}?ref=${rc}`;
+  const linkInput = document.getElementById('referral-link');
+  if (linkInput) linkInput.value = referralUrl;
+
+  try {
+    // Load referrals from DB
+    const { data: refs } = await db.from('referrals').select('*').eq('referrer_id', currentUser.id).order('created_at', { ascending: false });
+    const referrals = refs || [];
+    const earned = referrals.filter(r => r.paid).reduce((s, r) => s + (r.amount || REFERRAL_REWARD), 0);
+    const pending = referrals.filter(r => !r.paid).reduce((s, r) => s + (r.amount || REFERRAL_REWARD), 0);
+    
+    const affTotal = document.getElementById('aff-total');
+    const affPending = document.getElementById('aff-pending');
+    const affClicks = document.getElementById('aff-clicks');
+    const affConversions = document.getElementById('aff-conversions');
+    if (affTotal) affTotal.textContent = fmtN(earned);
+    if (affPending) affPending.textContent = fmtN(pending);
+    if (affConversions) affConversions.textContent = referrals.length;
+
+    // Estimate clicks from referral_clicks table or fallback
+    try {
+      const { count } = await db.from('referral_clicks').select('*', { count: 'exact', head: true }).eq('referrer_id', currentUser.id);
+      if (affClicks) affClicks.textContent = count || 0;
+    } catch(e) {
+      // If referral_clicks table doesn't exist, estimate
+      if (affClicks) affClicks.textContent = referrals.length * 3;
+    }
+
+    // Earnings table
+    const tbody = document.getElementById('aff-table-body');
+    if (!tbody) return;
+    if (!referrals.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)"><i class="fa-solid fa-link" style="font-size:1.5rem;display:block;margin-bottom:.5rem;color:var(--border2)"></i>No referrals yet. Share your link to start earning!</td></tr>';
+      return;
+    }
+    tbody.innerHTML = referrals.map(r => {
+      const name = r.referred_name || r.referred_email || 'New User';
+      return `<tr>
+        <td>${fmtDate(r.created_at)}</td>
+        <td>${escHtml(name)}</td>
+        <td>Direct Link</td>
+        <td class="font-bold color-green">${fmtN(r.amount || REFERRAL_REWARD)}</td>
+        <td><span class="badge ${r.paid ? 'badge-green' : 'badge-gold'}">${r.paid ? 'Paid' : 'Pending'}</span></td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    console.error('Affiliate load error:', e);
+  }
+}
+
+// Track a referral signup — called when a new user signs up via ?ref= link
+async function trackReferralSignup(newUserId, referrerCode) {
+  try {
+    // Find the referrer by referral_code or by user ID
+    let referrerId = null;
+    let referrerName = 'Referrer';
+
+    // First try matching by referral_code
+    const { data: referrerByCode } = await db.from('profiles').select('id, name').eq('referral_code', referrerCode).single();
+    if (referrerByCode) {
+      referrerId = referrerByCode.id;
+      referrerName = referrerByCode.name;
+    } else {
+      // Try matching by user ID directly (link may use user ID)
+      const { data: referrerById } = await db.from('profiles').select('id, name').eq('id', referrerCode).single();
+      if (referrerById) {
+        referrerId = referrerById.id;
+        referrerName = referrerById.name;
+      }
+    }
+
+    if (!referrerId || referrerId === newUserId) return; // Can't self-refer
+
+    // Check if already tracked
+    const { data: existing } = await db.from('referrals').select('id').eq('referrer_id', referrerId).eq('referred_id', newUserId).limit(1);
+    if (existing?.length) return; // Already tracked
+
+    // Get the new user's info
+    const { data: newUserProfile } = await db.from('profiles').select('name, email').eq('id', newUserId).single();
+
+    // Create referral record
+    await db.from('referrals').insert({
+      referrer_id: referrerId,
+      referred_id: newUserId,
+      referred_name: newUserProfile?.name || 'New User',
+      referred_email: newUserProfile?.email || '',
+      amount: REFERRAL_REWARD,
+      paid: false
+    });
+
+    // Clear the referral cookie
+    localStorage.removeItem('bs_ref');
+    sessionStorage.removeItem('referred_by');
+
+    console.log(`Referral tracked: ${referrerName} referred user ${newUserId}`);
+  } catch(e) {
+    console.warn('Referral tracking error:', e.message);
+  }
 }
 
 async function loadWithdrawalHistory() {
@@ -5350,75 +5459,19 @@ async function deletePortfolioImage(url, gigId, event) {
 }
 
 
+
 // ====================================================
-//  AFFILIATE SYSTEMS
+//  AFFILIATE DEEP LINK HANDLER
 // ====================================================
-async function generateAndLoadAffiliateData() {
-  if (!currentUser || (currentUser.profile?.role !== 'seller' && currentUser.profile?.role !== 'both')) return;
-  
-  const linkInput = document.getElementById('referral-link');
-  if (!linkInput) return;
-  linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${currentUser.id}`;
-  
-  try {
-    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', currentUser.id).order('created_at', { ascending: false });
-    if(error) throw error;
-    
-    const total = earnings?.filter(e=>e.status==='paid').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
-    const pending = earnings?.filter(e=>e.status==='pending').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
-    
-    document.getElementById('aff-total').textContent = `₦${total.toLocaleString()}`;
-    document.getElementById('aff-pending').textContent = `₦${pending.toLocaleString()}`;
-    // Clicks/conversions would normally come from a referrals/clicks table
-    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', currentUser.id);
-    document.getElementById('aff-conversions').textContent = refCount || 0;
-    
-    const tbody = document.getElementById('aff-table-body');
-    if(!earnings || earnings.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text3)">No earnings yet</td></tr>';
-    } else {
-      tbody.innerHTML = earnings.map(e => `
-        <tr>
-          <td>${new Date(e.created_at).toLocaleDateString()}</td>
-          <td>${e.product_name || 'Referral Subscription'}</td>
-          <td>${e.source || 'referral_link'}</td>
-          <td style="font-weight:600;color:var(--green)">₦${e.earning_amount}</td>
-          <td><span class="badge ${e.status==='paid'?'badge-green':e.status==='cancelled'?'badge-red':'badge-gold'}">${e.status}</span></td>
-        </tr>
-      `).join('');
-    }
-  } catch(e) {
-    console.error('Affiliate load error', e);
-  }
-}
-
-function copyReferralLink() {
-  const linkInput = document.getElementById('referral-link');
-  if(!linkInput || !linkInput.value) return;
-  navigator.clipboard.writeText(linkInput.value).then(()=>{
-    toast('Copied', 'Referral link copied to clipboard', 'success');
-  }).catch(()=>{
-    linkInput.select();
-    document.execCommand('copy');
-    toast('Copied', 'Referral link copied to clipboard', 'success');
-  });
-}
-
-// Intercept showDash to trigger loads
-const _origShowDash = showDash;
-showDash = function(section) {
-  _origShowDash(section);
-  if (section === 'advertise') loadActiveAds();
-  if (section === 'affiliate') generateAndLoadAffiliateData();
-}
-
-// Track referrals in DB on signup
-// Need to add referral ref processing in app.js
+// Capture referral code from URL on page load
 window.addEventListener('DOMContentLoaded', () => {
   const urlParams = new URLSearchParams(window.location.search);
   const ref = urlParams.get('ref');
-  if (ref && !sessionStorage.getItem('referred_by')) {
+  if (ref) {
+    localStorage.setItem('bs_ref', ref);
     sessionStorage.setItem('referred_by', ref);
+    // Track the click silently
+    db.from('referral_clicks').insert({ referrer_id: ref, clicked_at: new Date().toISOString() }).catch(() => {});
   }
 });
 
@@ -6953,13 +7006,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Hook into showDash for seller analytics + coupons
+// Hook into showDash for seller analytics, coupons, ads, and affiliate
 const _origShowDash2 = showDash;
 showDash = function(section) {
   _origShowDash2(section);
   if (section === 'analytics') loadSellerAnalytics();
   if (section === 'coupons') loadSellerCoupons();
   if (section === 'flash') loadFlashSaleProducts();
+  if (section === 'advertise') loadActiveAds();
 };
 
 async function loadFlashSaleProducts() {
