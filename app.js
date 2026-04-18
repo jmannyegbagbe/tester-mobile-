@@ -5,7 +5,7 @@ const SB_URL  = 'https://obzhlmzswthnorkiqemh.supabase.co';
 const SB_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9iemhsbXpzd3Robm9ya2lxZW1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxMDE2NjgsImV4cCI6MjA4ODY3NzY2OH0.5I4Ln0913h0AH5z4e64QBVx88igcIwEaM0Lz11FqDvU';
 const EDGE_URL = SB_URL + '/functions/v1';
 // ── GROQ DIRECT CALL (replaces CLAUDE_EDGE_URL / edge function) ──────────────
-const GROQ_API_KEY = "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";
+const GROQ_API_KEY = "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";
 const GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL   = "llama-3.3-70b-versatile";
 
@@ -88,7 +88,9 @@ const db = window.supabase.createClient(SB_URL, SB_KEY, {
     persistSession:     true,
     autoRefreshToken:   true,
     detectSessionInUrl: true,
-    storage:            window.localStorage
+    storage:            window.localStorage,
+    storageKey:         'buysell-auth-token',
+    flowType:           'implicit'       // 'pkce' breaks on file:// and non-HTTPS origins
   }
 });
 
@@ -229,6 +231,9 @@ async function handleAuth(e) {
       const user = data.session?.user || data.user;
       await onAuthSuccess(user);
       closeModal('auth-modal');
+      // Auto-navigate to the user's dashboard based on role
+      const role = currentUser?.profile?.role || 'buyer';
+      enterSite(role);
 
     } else {
       // ── SIGN UP ──────────────────────────────────────────────
@@ -265,6 +270,8 @@ async function handleAuth(e) {
           const user = loginData.session?.user || loginData.user;
           await onAuthSuccess(user);
           closeModal('auth-modal');
+          // Auto-navigate to the user's dashboard
+          enterSite(currentUser?.profile?.role || 'buyer');
           return;
         } else if (msg.includes('rate limit') || msg.includes('too many')) {
           toast('Too Many Attempts', 'Wait a few minutes and try again', 'warn', 7000);
@@ -290,6 +297,8 @@ async function handleAuth(e) {
       await upsertProfile(user, { name, role, accounts, whatsapp: wa });
       await onAuthSuccess(user);
       closeModal('auth-modal');
+      // Auto-navigate new user to their dashboard
+      enterSite(role);
 
       const msgs = {
         buyer:            '🛍️ Welcome! Browse thousands of products.',
@@ -350,6 +359,7 @@ async function onAuthSuccess(user) {
 
   currentRole = currentUser.profile?.role || 'buyer';
   updateNavForUser();
+  updateLandingForUser();
 }
 
 async function checkSession() {
@@ -366,8 +376,12 @@ async function checkSession() {
       }
     }
     if (event === 'SIGNED_OUT') {
-      currentUser = null;
-      currentRole = 'buyer';
+      // Only reset state if we were actually signed in
+      // (prevents clearing state during initial load when no session exists)
+      if (currentUser) {
+        currentUser = null;
+        currentRole = 'buyer';
+      }
     }
     if (event === 'TOKEN_REFRESHED' && session?.user) {
       currentUser = session.user;
@@ -378,9 +392,23 @@ async function checkSession() {
   });
 
   // Then check for an existing persisted session
-  const { data: { session } } = await db.auth.getSession();
-  if (session?.user) {
-    await onAuthSuccess(session.user);
+  try {
+    const { data: { session }, error } = await db.auth.getSession();
+    if (session?.user) {
+      await onAuthSuccess(session.user);
+      // Auto-skip landing page and go to dashboard
+      enterSite(currentUser?.profile?.role || 'buyer');
+    } else if (error) {
+      console.warn('Session restore failed:', error.message);
+      // Try refreshing the session token
+      const { data: refreshData } = await db.auth.refreshSession().catch(() => ({ data: null }));
+      if (refreshData?.session?.user) {
+        await onAuthSuccess(refreshData.session.user);
+        enterSite(currentUser?.profile?.role || 'buyer');
+      }
+    }
+  } catch(e) {
+    console.warn('Session check error:', e.message);
   }
 }
 
@@ -405,9 +433,40 @@ function updateNavForUser() {
   document.getElementById('referral-link').value = `https://buysell.ng/ref/${rc}`;
 
   // Update Toggle View text for Service Providers
+  /*
   if (currentRole === 'service_provider') {
     document.getElementById('toggle-view-text').textContent = 'Service Dashboard';
     document.getElementById('toggle-view-icon').className = 'fa-solid fa-wrench';
+  }
+  */
+}
+
+// Update landing page Sign In button to show signed-in state
+function updateLandingForUser() {
+  if (!currentUser) return;
+  const btn = document.getElementById('landing-auth-btn');
+  const icon = document.getElementById('landing-auth-icon');
+  const text = document.getElementById('landing-auth-text');
+  if (!btn || !text) return;
+  const name = currentUser.profile?.name || currentUser.email?.split('@')[0] || 'User';
+  const role = currentUser.profile?.role || 'buyer';
+  const roleLabel = role === 'seller' ? '🏪 Seller' : role === 'both' ? '🔄 Both' : role === 'admin' ? '⚙️ Admin' : '🛍️ Buyer';
+  text.textContent = name;
+  if (icon) icon.className = 'fa-solid fa-circle-check';
+  btn.style.color = '#4ade80';
+  btn.title = `Signed in as ${name} (${roleLabel}) — Click to enter`;
+}
+
+// Handle landing page auth button click
+function handleLandingAuthClick() {
+  if (currentUser) {
+    // Already signed in — go straight to dashboard
+    const role = currentUser.profile?.role || 'buyer';
+    enterSite(role);
+  } else {
+    // Not signed in — open auth modal
+    showModal('auth-modal');
+    toggleAuth('login');
   }
 }
 
@@ -451,12 +510,35 @@ async function sendPasswordReset() {
 }
 
 async function logoutUser() {
-  await db.auth.signOut();
+  // Use 'local' scope — only clears the browser session.
+  // 'global' (default) hits the Supabase API which has strict rate limits
+  // and can block re-login for up to 1 hour if called too often.
+  await db.auth.signOut({ scope: 'local' });
   currentUser = null;
+  currentRole = 'buyer';
   document.getElementById('nav-auth-btns').classList.remove('hidden');
   document.getElementById('nav-user-btns').classList.add('hidden');
-  enterSite('buyer');
-  toast('Signed Out', '', 'info');
+  // Reset landing page auth button
+  const landingText = document.getElementById('landing-auth-text');
+  const landingIcon = document.getElementById('landing-auth-icon');
+  const landingBtn = document.getElementById('landing-auth-btn');
+  if (landingText) landingText.textContent = 'Sign In';
+  if (landingIcon) landingIcon.className = 'fa-solid fa-sign-in-alt';
+  if (landingBtn) landingBtn.style.color = '';
+  // Go back to landing page
+  document.getElementById('buyer-view').style.display = 'none';
+  document.getElementById('seller-dashboard').style.display = 'none';
+  document.getElementById('storefront-view').style.display = 'none';
+  document.getElementById('topbar').style.display = 'none';
+  document.getElementById('main-nav').style.display = 'none';
+  document.getElementById('chatbot-fab').style.display = 'none';
+  document.getElementById('wa-fab').style.display = 'none';
+  document.getElementById('mob-ham-btn').style.display = 'none';
+  document.body.classList.remove('in-seller');
+  const landing = document.getElementById('landing');
+  landing.style.display = 'block';
+  landing.style.opacity = '1';
+  toast('Signed Out', 'See you soon!', 'info');
 }
 
 
@@ -531,8 +613,8 @@ function enterSite(mode) {
       showAdminPortal();
     } else if (mode === 'seller' || mode === 'both') {
       showSellerDashboard();
-    } else if (mode === 'service_provider') {
-      showServiceDashboard();
+    /* } else if (mode === 'service_provider') {
+      showServiceDashboard(); */
     } else {
       showBuyerView();
     }
@@ -545,10 +627,10 @@ function showBuyerView() {
   document.getElementById('seller-dashboard').style.display = 'none';
   document.getElementById('storefront-view').style.display = 'none';
   if(document.getElementById('admin-portal-view')) document.getElementById('admin-portal-view').style.display = 'none';
-  if(document.getElementById('service-provider-view')) document.getElementById('service-provider-view').style.display = 'none';
+  /* if(document.getElementById('service-provider-view')) document.getElementById('service-provider-view').style.display = 'none'; */
 
-  document.getElementById('toggle-view-icon').className = currentUser?.profile?.role === 'service_provider' ? 'fa-solid fa-wrench' : 'fa-solid fa-store';
-  document.getElementById('toggle-view-text').textContent = currentUser?.profile?.role === 'service_provider' ? 'Service Dashboard' : 'Seller Dashboard';
+  /* document.getElementById('toggle-view-icon').className = currentUser?.profile?.role === 'service_provider' ? 'fa-solid fa-wrench' : 'fa-solid fa-store';
+  document.getElementById('toggle-view-text').textContent = currentUser?.profile?.role === 'service_provider' ? 'Service Dashboard' : 'Seller Dashboard'; */
   document.getElementById('mob-ham-btn').style.display = 'none';
   document.body.classList.remove('in-seller');
   currentRole = 'buyer';
@@ -564,7 +646,7 @@ function showSellerDashboard() {
   document.getElementById('seller-dashboard').style.display = 'block';
   document.getElementById('storefront-view').style.display = 'none';
   if(document.getElementById('admin-portal-view')) document.getElementById('admin-portal-view').style.display = 'none';
-  if(document.getElementById('service-provider-view')) document.getElementById('service-provider-view').style.display = 'none';
+  /* if(document.getElementById('service-provider-view')) document.getElementById('service-provider-view').style.display = 'none'; */
 
   document.getElementById('toggle-view-icon').className = 'fa-solid fa-store';
   document.getElementById('toggle-view-text').textContent = 'Back to Shopping';
@@ -585,16 +667,16 @@ function showSellerDashboard() {
 }
 
 function toggleView() {
-  if (currentRole === 'seller' || currentRole === 'service_provider') {
+  if (currentRole === 'seller') { // || currentRole === 'service_provider'
     showBuyerView();
   } else { 
     if (!currentUser) { showModal('auth-modal'); return; }
     if (!checkAndPromptKyc()) return; // Block unverified access
-    if (currentUser.profile?.role === 'service_provider') {
+    /* if (currentUser.profile?.role === 'service_provider') {
       showServiceDashboard();
-    } else {
+    } else { */
       showSellerDashboard(); 
-    }
+    /* } */
   }
 }
 
@@ -710,6 +792,7 @@ function prodCard(p) {
     <div class="prod-img-wrap">
       <img src="${p.image_url||'https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=400&h=400&fit=crop'}" alt="${escHtml(p.name)}" loading="lazy">
       ${badges ? `<div class="prod-flags">${badges}</div>` : ''}
+      <button class="prod-wish-btn" onclick="event.stopPropagation();toggleWishlist('${p.id}')" title="${isWishlisted(p.id)?'Remove from Wishlist':'Save to Wishlist'}"><i class="fa-${isWishlisted(p.id)?'solid':'regular'} fa-heart" style="${isWishlisted(p.id)?'color:#ef4444':''}"></i></button>
       ${isSoldOut ? `<div class="prod-sold-overlay"><span class="prod-sold-label">SOLD OUT</span></div>` : `<button class="prod-quick-add" onclick="event.stopPropagation();addToCart(${JSON.stringify({id:p.id,name:p.name,price:p.price,image_url:p.image_url,seller_id:p.seller_id,profiles:p.profiles}).replace(/"/g,'&quot;')})" aria-label="Add to cart"><i class="fa-solid fa-cart-plus"></i></button>`}
     </div>
     <div class="prod-body">
@@ -918,6 +1001,8 @@ async function openProduct(id) {
   document.getElementById('modal-flags').innerHTML = flags.join('');
   // Reviews
   loadProductReviews(id);
+  // Update wishlist heart button state
+  updateModalWishBtn();
 }
 
 async function loadProductReviews(productId) {
@@ -949,7 +1034,13 @@ async function loadProductReviews(productId) {
   // Review list
   const list = document.getElementById('modal-reviews-list');
   if (!count) { list.innerHTML = '<p class="color-text3 text-sm" style="padding:.5rem 0">No reviews yet. Be the first to share your experience!</p>'; return; }
-  list.innerHTML = reviews.map(r => `
+  list.innerHTML = reviews.map(r => {
+    // Build image gallery HTML if review has images
+    const imgs = r.image_urls || r.images || [];
+    const galleryHtml = imgs.length ? `<div class="review-images-gallery">${imgs.map(url => 
+      `<img src="${sanitizeUrl(url)}" alt="Review photo" onclick="openReviewLightbox('${sanitizeUrl(url)}')" loading="lazy">`
+    ).join('')}</div>` : '';
+    return `
     <div class="review-card">
       <div class="flex justify-between items-center">
         <div style="display:flex;align-items:center;gap:.4rem">
@@ -959,8 +1050,19 @@ async function loadProductReviews(productId) {
         <div class="stars sm">${'★'.repeat(r.rating)+'☆'.repeat(5-r.rating)}</div>
       </div>
       <p class="review-text">${escHtml(r.review_text || r.comment || '')}</p>
-      <span class="text-xs color-text3"><i class="fa-solid fa-check-circle" style="color:var(--green)"></i> Verified Purchase · ${fmtDate(r.created_at)}</span>
-    </div>`).join('');
+      ${galleryHtml}
+      <span class="text-xs color-text3"><i class="fa-solid fa-check-circle" style="color:var(--green)"></i> Verified Purchase · ${fmtDate(r.created_at)}${imgs.length ? ` · <i class="fa-solid fa-camera" style="color:var(--text3)"></i> ${imgs.length} photo${imgs.length>1?'s':''}` : ''}</span>
+    </div>`;
+  }).join('');
+}
+
+// Lightbox for viewing review images full-size
+function openReviewLightbox(url) {
+  const lb = document.createElement('div');
+  lb.className = 'review-lightbox';
+  lb.innerHTML = `<img src="${url}" alt="Review photo full size">`;
+  lb.onclick = () => lb.remove();
+  document.body.appendChild(lb);
 }
 
 // ====================================================
@@ -1205,6 +1307,8 @@ async function submitTransferOrder() {
 //  REVIEWS
 // ====================================================
 let reviewProductId = null;
+let reviewImageFiles = [];    // Holds File objects for review photo upload
+
 function openReviewModal() {
   if (!currentUser) { showModal('auth-modal'); return; }
   if (!currentProd) return;
@@ -1213,7 +1317,56 @@ function openReviewModal() {
   selectedRating = 0;
   setRating(0);
   document.getElementById('review-text').value = '';
+  // Clear image previews
+  reviewImageFiles = [];
+  document.getElementById('review-img-previews').innerHTML = '';
+  document.getElementById('review-images-input').value = '';
   showModal('review-modal');
+}
+
+// Preview selected review images
+function previewReviewImages(input) {
+  const files = Array.from(input.files);
+  const maxFiles = 3;
+  const maxSize = 5 * 1024 * 1024; // 5MB
+
+  for (const file of files) {
+    if (reviewImageFiles.length >= maxFiles) {
+      toast('Max 3 Photos', 'You can upload up to 3 images per review', 'warn');
+      break;
+    }
+    if (file.size > maxSize) {
+      toast('File Too Large', `${file.name} exceeds 5MB limit`, 'warn');
+      continue;
+    }
+    if (!file.type.startsWith('image/')) continue;
+    reviewImageFiles.push(file);
+  }
+
+  renderReviewPreviews();
+  input.value = ''; // Reset input so same file can be re-selected
+}
+
+function renderReviewPreviews() {
+  const container = document.getElementById('review-img-previews');
+  container.innerHTML = reviewImageFiles.map((file, idx) => {
+    const url = URL.createObjectURL(file);
+    return `<div class="review-img-preview">
+      <img src="${url}" alt="Review photo ${idx+1}">
+      <button class="remove-preview" onclick="removeReviewImage(${idx})" title="Remove">
+        <i class="fa-solid fa-times"></i>
+      </button>
+    </div>`;
+  }).join('');
+
+  // Hide upload zone if max reached
+  const zone = document.getElementById('review-upload-zone');
+  if (zone) zone.style.display = reviewImageFiles.length >= 3 ? 'none' : 'flex';
+}
+
+function removeReviewImage(idx) {
+  reviewImageFiles.splice(idx, 1);
+  renderReviewPreviews();
 }
 
 function setRating(val) {
@@ -1228,14 +1381,41 @@ async function submitReview() {
   if (!selectedRating) { toast('Please select a rating','','warn'); return; }
   const text = document.getElementById('review-text').value.trim();
   if (!text) { toast('Please write a review','','warn'); return; }
+
+  const btn = document.getElementById('review-submit-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin-anim"><i class="fa-solid fa-circle-notch"></i></span> Uploading...';
+
   try {
+    // Upload review images to Supabase storage
+    const imageUrls = [];
+    for (const file of reviewImageFiles) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      const path = `reviews/${currentUser.id}/${Date.now()}_${Math.random().toString(36).substr(2,6)}.${ext}`;
+      const { data, error: upErr } = await db.storage.from('uploads').upload(path, file, { upsert: false });
+      if (!upErr && data) {
+        const { data: urlData } = db.storage.from('uploads').getPublicUrl(data.path);
+        if (urlData?.publicUrl) imageUrls.push(urlData.publicUrl);
+      }
+    }
+
     await callEdge('submit-review', {
       product_id:  reviewProductId,
       rating:      selectedRating,
-      review_text: text
+      review_text: text,
+      image_urls:  imageUrls
     });
-  } catch(e) { toast('Error', e.message, 'error'); return; }
+  } catch(e) {
+    toast('Error', e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa-solid fa-star"></i> Submit Review';
+    return;
+  }
+
   toast('Review Submitted! ⭐', 'Thanks for your feedback!', 'success');
+  btn.disabled = false;
+  btn.innerHTML = '<i class="fa-solid fa-star"></i> Submit Review';
+  reviewImageFiles = [];
   closeModal('review-modal');
   loadProductReviews(reviewProductId);
   loadProducts();
@@ -1247,12 +1427,15 @@ async function submitReview() {
 function switchBuyerTab(tab) {
   document.getElementById('tab-shop').classList.toggle('active', tab==='shop');
   document.getElementById('tab-orders').classList.toggle('active', tab==='orders');
-  document.getElementById('tab-services').classList.toggle('active', tab==='services');
+  // Service tab commented out — null-safe
+  const tabSvc = document.getElementById('tab-services');
+  if (tabSvc) tabSvc.classList.toggle('active', tab==='services');
   document.getElementById('buyer-shop-tab').classList.toggle('hidden', tab!=='shop');
   document.getElementById('buyer-orders-tab').classList.toggle('hidden', tab!=='orders');
-  document.getElementById('buyer-services-tab').classList.toggle('hidden', tab!=='services');
+  const svcTab = document.getElementById('buyer-services-tab');
+  if (svcTab) svcTab.classList.toggle('hidden', tab!=='services');
   if (tab==='orders') loadBuyerOrders();
-  if (tab==='services') loadServiceGigs();
+  // if (tab==='services') loadServiceGigs(); // Service provider disabled
 }
 
 async function loadBuyerOrders() {
@@ -1910,15 +2093,22 @@ async function loadSellerReviews() {
   document.getElementById('rv-total').textContent = revs.length;
   document.getElementById('rv-5star').textContent = fiveStars;
   list.classList.remove('hidden');
-  list.innerHTML = revs.map(r=>`
+  list.innerHTML = revs.map(r => {
+    const imgs = r.image_urls || r.images || [];
+    const galleryHtml = imgs.length ? `<div class="review-images-gallery">${imgs.map(url => 
+      `<img src="${sanitizeUrl(url)}" alt="Review photo" onclick="openReviewLightbox('${sanitizeUrl(url)}')" loading="lazy">`
+    ).join('')}</div>` : '';
+    return `
     <div class="review-card">
       <div class="flex justify-between">
         <span class="reviewer-name">${escHtml(r.profiles?.name||'Buyer')}</span>
         <div class="stars sm">${'★'.repeat(r.rating)+'☆'.repeat(5-r.rating)}</div>
       </div>
       <p class="review-text">${escHtml(r.review_text)}</p>
-      <span class="text-xs color-text3">${fmtDate(r.created_at)}</span>
-    </div>`).join('');
+      ${galleryHtml}
+      <span class="text-xs color-text3">${fmtDate(r.created_at)}${imgs.length ? ` · <i class="fa-solid fa-camera"></i> ${imgs.length} photo${imgs.length>1?'s':''}` : ''}</span>
+    </div>`;
+  }).join('');
 }
 
 // ====================================================
@@ -2316,6 +2506,20 @@ async function loadAdminOverview() {
   _renderAdminOrdersChart(orders || []);
 }
 
+/* ── ORDERS STATUS CHART ── */
+function _renderAdminOrdersChart(orders) {
+  // Orders status breakdown (pie/doughnut)
+  if (!orders?.length) return;
+  const statusMap = {};
+  orders.forEach(o => {
+    const s = o.status || 'unknown';
+    statusMap[s] = (statusMap[s] || 0) + 1;
+  });
+  // No dedicated canvas in the admin overview; log silently
+  // This prevents the undefined function crash
+  console.log('Admin orders breakdown:', statusMap);
+}
+
    // ====================================================
 //  ADMIN AI ASSISTANT (uses Groq directly)
 // ====================================================
@@ -2347,7 +2551,7 @@ async function askAdminBot(preset) {
     // Fetch open disputes
     const { data: disputes } = await db.from('disputes').select('id, order_id, dispute_type, description, status, created_at, buyer_id').eq('status', 'open').order('created_at', { ascending: false }).limit(20);
     // Fetch all sellers + service providers with trial/commission info
-    const { data: sellers } = await db.from('profiles').select('id, name, email, role, commission_paid, trial_end, kyc_verified, created_at').in('role', ['seller', 'service_provider']).order('created_at', { ascending: false });
+    const { data: sellers } = await db.from('profiles').select('id, name, email, role, commission_paid, trial_end, kyc_verified, created_at, is_suspended').in('role', ['seller', 'service_provider', 'buyer']).order('created_at', { ascending: false });
     // Fetch pending receipts
     const { data: receipts } = await db.from('commission_receipts').select('id, seller_id, status, created_at, profiles(name)').eq('status', 'pending').limit(10);
     // Fetch recent orders
@@ -2381,8 +2585,14 @@ RECENT ORDERS (last 20): ${(orders||[]).length} orders, Total: ${fmtN((orders||[
   Pending: ${(orders||[]).filter(o=>o.status==='pending').length} | Confirmed: ${(orders||[]).filter(o=>o.status==='confirmed').length} | Delivered: ${(orders||[]).filter(o=>o.status==='delivered').length}
 
 EXPIRED/UNPAID USERS (candidates for suspension):
-${expiredSellers.filter(s=>s.role==='seller').map(s => `  - SELLER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}`).join('\n') || '  No expired sellers'}
-${expiredSPs.map(s => `  - SVC_PROVIDER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}`).join('\n') || '  No expired service providers'}
+${expiredSellers.filter(s=>s.role==='seller').map(s => `  - SELLER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}${s.is_suspended ? ' [SUSPENDED]' : ''}`).join('\n') || '  No expired sellers'}
+${expiredSPs.map(s => `  - SVC_PROVIDER: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}${s.is_suspended ? ' [SUSPENDED]' : ''}`).join('\n') || '  No expired service providers'}
+
+SUSPENDED/DEACTIVATED ACCOUNTS:
+${allSellers.filter(s => s.is_suspended).map(s => `  - ${s.role?.toUpperCase()}: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}`).join('\n') || '  No suspended accounts'}
+
+ALL REGISTERED USERS (for lookup):
+${allSellers.slice(0, 30).map(s => `  - ${s.role?.toUpperCase()}: ${s.name} (${s.email}) ID:${s.id.substring(0,8)}${s.commission_paid ? ' [PAID]' : ''}${s.is_suspended ? ' [SUSPENDED]' : ''}`).join('\n')}
 === END SNAPSHOT ===`;
   } catch(e) {
     dbContext = '\n[Database read failed – using cached stats only]';
@@ -2410,6 +2620,10 @@ You have live access to: disputes, sellers, service providers, orders, revenue, 
 11. [ACTION: EXPORT_REPORT:type] — Generate report (sellers/orders/revenue)
 12. [ACTION: CREATE_COUPON:code:percent:days] — Create promo coupon
 13. [ACTION: REFRESH_DATA] — Reload dashboard stats
+14. [ACTION: REACTIVATE_USER:uuid] — Reactivate a suspended user, restore their seller access, re-enable products
+15. [ACTION: CHANGE_ROLE:uuid:role] — Change a user's role (buyer/seller/admin)
+16. [ACTION: EXTEND_TRIAL:uuid:days] — Extend a user's trial period by X days
+17. [ACTION: GRANT_COMMISSION:uuid] — Mark a user's commission as paid (activate seller access)
 
 📈 INSIGHTS TO PROVIDE:
 • Revenue trends & forecasts
@@ -2542,6 +2756,38 @@ REMEMBER: You're the expert. Proactively identify issues, suggest fixes, and act
       loadAdminOverview();
       actionLog.push('Refreshed dashboard');
     }
+    // 14. Reactivate user
+    const reactivateMatch = finalReply.match(/\[ACTION: REACTIVATE_USER:([a-f0-9-]+)\]/i);
+    if (reactivateMatch) {
+      const targetId = reactivateMatch[1];
+      finalReply = finalReply.replace(reactivateMatch[0], `✅ Reactivating user ${targetId.substring(0,8)}...`);
+      await adminAiReactivateUser(targetId);
+      actionLog.push(`Reactivated user ${targetId.substring(0,8)}`);
+    }
+    // 15. Change role
+    const roleMatch = finalReply.match(/\[ACTION: CHANGE_ROLE:([a-f0-9-]+):(buyer|seller|admin|both)\]/i);
+    if (roleMatch) {
+      const [_, targetId, newRole] = roleMatch;
+      finalReply = finalReply.replace(roleMatch[0], `✅ Changing user ${targetId.substring(0,8)} role to ${newRole}...`);
+      await adminAiChangeRole(targetId, newRole);
+      actionLog.push(`Changed user ${targetId.substring(0,8)} to ${newRole}`);
+    }
+    // 16. Extend trial
+    const trialMatch = finalReply.match(/\[ACTION: EXTEND_TRIAL:([a-f0-9-]+):(\d+)\]/i);
+    if (trialMatch) {
+      const [_, targetId, days] = trialMatch;
+      finalReply = finalReply.replace(trialMatch[0], `✅ Extending trial for ${targetId.substring(0,8)} by ${days} days...`);
+      await adminAiExtendTrial(targetId, parseInt(days));
+      actionLog.push(`Extended trial for ${targetId.substring(0,8)} by ${days} days`);
+    }
+    // 17. Grant commission (activate seller)
+    const grantMatch = finalReply.match(/\[ACTION: GRANT_COMMISSION:([a-f0-9-]+)\]/i);
+    if (grantMatch) {
+      const targetId = grantMatch[1];
+      finalReply = finalReply.replace(grantMatch[0], `✅ Activating seller ${targetId.substring(0,8)}...`);
+      await adminAiGrantCommission(targetId);
+      actionLog.push(`Granted commission to ${targetId.substring(0,8)}`);
+    }
     
     // Add action summary if any actions taken
     if (actionLog.length > 0) {
@@ -2627,12 +2873,70 @@ async function adminAiDeactivateUser(userId) {
     // Pause all their products/gigs
     await db.from('products').update({ status: 'paused' }).eq('seller_id', userId).catch(() => {});
     await db.from('service_gigs').update({ status: 'paused' }).eq('provider_id', userId).catch(() => {});
-    // Mark commission as unpaid to trigger lockout
-    await db.from('profiles').update({ commission_paid: false, trial_end: new Date('2020-01-01').toISOString() }).eq('id', userId);
+    // Mark commission as unpaid to trigger lockout and flag as suspended
+    await db.from('profiles').update({ commission_paid: false, trial_end: new Date('2020-01-01').toISOString(), is_suspended: true }).eq('id', userId);
     toast('User Deactivated', `User ${userId.substring(0,8)} has been suspended by AI`, 'warn', 5000);
     loadAdminSellers();
   } catch(e) {
     toast('Deactivation Failed', e.message, 'error');
+  }
+}
+
+async function adminAiReactivateUser(userId) {
+  try {
+    // Restore commission status + clear suspension flag + extend trial by 30 days
+    const newTrialEnd = new Date();
+    newTrialEnd.setDate(newTrialEnd.getDate() + 30);
+    await db.from('profiles').update({
+      commission_paid: true,
+      is_suspended: false,
+      trial_end: newTrialEnd.toISOString()
+    }).eq('id', userId);
+    // Re-enable all their products
+    await db.from('products').update({ status: 'active' }).eq('seller_id', userId).catch(() => {});
+    // Re-enable any service gigs
+    await db.from('service_gigs').update({ status: 'active' }).eq('provider_id', userId).catch(() => {});
+    toast('User Reactivated ✅', `User ${userId.substring(0,8)} has been restored with 30-day access`, 'success', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Reactivation Failed', e.message, 'error');
+  }
+}
+
+async function adminAiChangeRole(userId, newRole) {
+  try {
+    await db.from('profiles').update({ role: newRole, accounts: newRole }).eq('id', userId);
+    toast('Role Changed ✅', `User ${userId.substring(0,8)} is now a ${newRole}`, 'success', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Role Change Failed', e.message, 'error');
+  }
+}
+
+async function adminAiExtendTrial(userId, days) {
+  try {
+    // Get current trial end, extend from now or from existing date
+    const { data: profile } = await db.from('profiles').select('trial_end').eq('id', userId).single();
+    const currentEnd = profile?.trial_end ? new Date(profile.trial_end) : new Date();
+    const baseDate = currentEnd > new Date() ? currentEnd : new Date();
+    baseDate.setDate(baseDate.getDate() + days);
+    await db.from('profiles').update({ trial_end: baseDate.toISOString(), is_suspended: false }).eq('id', userId);
+    toast('Trial Extended ✅', `User ${userId.substring(0,8)} trial extended by ${days} days`, 'success', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Trial Extension Failed', e.message, 'error');
+  }
+}
+
+async function adminAiGrantCommission(userId) {
+  try {
+    await db.from('profiles').update({ commission_paid: true, is_suspended: false }).eq('id', userId);
+    // Re-enable their products
+    await db.from('products').update({ status: 'active' }).eq('seller_id', userId).catch(() => {});
+    toast('Commission Granted ✅', `User ${userId.substring(0,8)} seller access activated`, 'success', 5000);
+    loadAdminSellers();
+  } catch(e) {
+    toast('Grant Failed', e.message, 'error');
   }
 }
 
@@ -2735,84 +3039,8 @@ async function adminAiCreateCoupon(code, percent, daysValid) {
   }
 }
 
-async function sendBroadcast() {
-  const target = document.getElementById('bc-target')?.value || 'all';
-  const title = document.getElementById('bc-title')?.value.trim();
-  const body = document.getElementById('bc-body')?.value.trim();
-  if (!title || !body) { toast('Fill all fields', '', 'warn'); return; }
-  try {
-    await db.from('broadcasts').insert({
-      target, title, message: body,
-      created_at: new Date().toISOString()
-    });
-    toast('Broadcast Sent!', title, 'success');
-    ['bc-title','bc-body'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
-  } catch(e) {
-    toast('Failed', e.message, 'error');
-  }
-}
-
-// ====================================================
-//  AI ACTION HANDLERS
-// ====================================================
-async function executeMassProviderSuspension() {
-  toast('Suspending Providers', 'AI is scanning service providers...', 'info', 3000);
-  const { data: providers } = await db.from('profiles').select('id, name, commission_paid, trial_end').eq('role', 'service_provider');
-  if (!providers) { toast('Failed', 'Could not retrieve providers', 'error'); return; }
-
-  const now = new Date();
-  const targetIds = providers
-    .filter(s => !s.commission_paid && (!s.trial_end || new Date(s.trial_end) <= now))
-    .map(s => s.id);
-
-  if (!targetIds.length) { toast('No Action Needed', 'All providers are paid or in trial', 'success'); return; }
-
-  // Pause their gigs
-  await db.from('service_gigs').update({ status: 'paused' }).in('provider_id', targetIds).catch(() => {});
-  const { error } = await db.from('profiles').update({ updated_at: new Date().toISOString() }).in('id', targetIds);
-  if (error) { toast('Error', error.message, 'error'); return; }
-
-  toast('Providers Suspended', `${targetIds.length} expired accounts locked out`, 'success', 6000);
-  loadAdminOverview();
-}
-
-async function adminAiDeactivateUser(userId) {
-  try {
-    // Pause all their products/gigs
-    await db.from('products').update({ status: 'paused' }).eq('seller_id', userId).catch(() => {});
-    await db.from('service_gigs').update({ status: 'paused' }).eq('provider_id', userId).catch(() => {});
-    // Mark commission as unpaid to trigger lockout
-    await db.from('profiles').update({ commission_paid: false, trial_end: new Date('2020-01-01').toISOString() }).eq('id', userId);
-    toast('User Deactivated', `User ${userId.substring(0,8)} has been suspended by AI`, 'warn', 5000);
-    loadAdminSellers();
-  } catch(e) {
-    toast('Deactivation Failed', e.message, 'error');
-  }
-}
-
-async function adminAiResolveDispute(disputeId) {
-  try {
-    await db.from('disputes').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', disputeId);
-    toast('Dispute Resolved', `Dispute ${disputeId.substring(0,8)} closed by AI`, 'success');
-    loadAdminDisputes();
-  } catch(e) {
-    toast('Failed', e.message, 'error');
-  }
-}
-
-async function adminAiApproveReceipt(receiptId) {
-  try {
-    const { data: receipt } = await db.from('commission_receipts').select('seller_id').eq('id', receiptId).single();
-    if (receipt?.seller_id) {
-      await db.from('profiles').update({ commission_paid: true }).eq('id', receipt.seller_id);
-    }
-    await db.from('commission_receipts').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', receiptId);
-    toast('Receipt Approved', 'Seller activated by AI', 'success');
-    loadAdminReceipts();
-  } catch(e) {
-    toast('Failed', e.message, 'error');
-  } 
-}
+// NOTE: sendBroadcast() is defined below in the admin section (line ~3065)
+// Duplicate AI action handlers removed — kept single definitions above (lines 2606–2738)
    
 async function loadAdminSellers() {
   if (!guardAdminPanel()) return;
@@ -3851,7 +4079,7 @@ function showServiceDashboard() {
   document.getElementById('storefront-view').style.display = 'none';
   if(document.getElementById('admin-portal-view')) document.getElementById('admin-portal-view').style.display = 'none';
 
-  document.getElementById('service-provider-view').style.display = 'block';
+  if(document.getElementById('service-provider-view')) document.getElementById('service-provider-view').style.display = 'block';
   document.body.classList.add('in-seller');
   currentRole = 'service_provider';
 
@@ -3869,13 +4097,7 @@ function showServiceDashboard() {
   loadMyGigs();
 }
 
-function copyReferralLink() {
-  const link = document.getElementById('referral-link')?.value;
-  if(!link) return;
-  navigator.clipboard.writeText(link).then(() => {
-    toast('Referral Link Copied! 🔗', 'Share it to start earning.', 'success');
-  });
-}
+// NOTE: copyReferralLink() defined below (line ~4963) with fallback support
 
 function importDropshipProduct(btn, productId) {
   // Security validation (Phase 4 mock)
@@ -3958,7 +4180,7 @@ function renderServiceCards(gigs) {
   }
   document.getElementById('svc-empty').classList.add('hidden');
   const grid = document.getElementById('svc-grid');
-  grid.classList.remove('hidden');
+  if (grid) grid.classList.remove('hidden');
 
   const categoryIcons = {
     'Plumbing': 'fa-faucet-drip', 'Electrical': 'fa-bolt', 'Cleaning': 'fa-broom',
@@ -4496,31 +4718,8 @@ async function bookService(gigId, providerId) {
   }
 }
 
-// ====================================================
-//  SERVICE PROVIDER — COMMISSION CHECK (same rules as sellers)
-// ====================================================
-async function checkServiceProviderCommission() {
-  if (!currentUser?.profile) return;
-  const p = currentUser.profile;
-  const role = p.role;
-  if (role !== 'service_provider') return;
-
-  const trialEnd = p.trial_end ? new Date(p.trial_end) : null;
-  const commPaid = p.commission_paid;
-
-  // Update SPD commission badge if it exists
-  const badge = document.getElementById('spd-comm-badge');
-  if (badge) {
-    if (commPaid) { badge.className='badge badge-green'; badge.textContent='✓ Active'; }
-    else if (trialEnd && trialEnd > new Date()) { badge.className='badge badge-gold'; badge.textContent=`Trial – ${Math.ceil((trialEnd-new Date())/86400000)}d left`; }
-    else { badge.className='badge badge-red'; badge.textContent='Suspended'; }
-  }
-
-  // Lock out if expired
-  if (!commPaid && trialEnd && trialEnd < new Date() && currentUser.email !== ADMIN_EMAIL) {
-    document.getElementById('suspended-modal').classList.add('open');
-  }
-}
+// NOTE: checkServiceProviderCommission() already defined above (line ~4330)
+// Duplicate removed to prevent redeclaration issues
 
 // ====================================================
 //  SERVICE PROVIDER — BOOKINGS (Provider Side)
@@ -4708,8 +4907,8 @@ async function previewAdMedia(input) {
 }
 
 async function initiateAdPayment() {
-  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) {
-    return toast('Access Denied', 'Only sellers and service providers can advertise', 'error');
+  if (!currentUser || (currentUser.profile?.role !== 'seller' && currentUser.profile?.role !== 'both')) {
+    return toast('Access Denied', 'Only sellers can advertise', 'error');
   }
 
   const title = document.getElementById('ad-title').value.trim();
@@ -4730,28 +4929,28 @@ async function initiateAdPayment() {
   btn.disabled = true;
 
   try {
-    const { data: profile } = await db.from('profiles').select('email').eq('id', user.id).single();
+    const { data: profile } = await db.from('profiles').select('email').eq('id', currentUser.id).single();
     
     let handler = PaystackPop.setup({
-      key: 'pk_test_b8e5c2cf1d5a7d72856f6ba3a7b6cf7169bed9b7', // Using test key for dev
-      email: profile?.email || user.email || 'advertiser@buysell.ng',
+      key: PAYSTACK_PUBLIC_KEY,
+      email: profile?.email || currentUser.email || 'advertiser@buysell.ng',
       amount: adFee * 100, // kobo
       currency: 'NGN',
       ref: 'AD_' + Math.floor(Math.random() * 1000000000 + 1),
       callback: async function(response) {
         toast('Payment Successful', 'Uploading advertisement...', 'success');
         
-        // Use existing submitProduct logic for file upload pattern
         const ext = file.name.split('.').pop();
-        const path = `ads/${user.id}/${Date.now()}.${ext}`;
-        const { data: uploadData, error: uploadErr } = await supabase.storage.from('products').upload(path, file);
+        const path = `ads/${currentUser.id}/${Date.now()}.${ext}`;
+        const { data: uploadData, error: uploadErr } = await db.storage.from('uploads').upload(path, file);
         if (uploadErr) throw uploadErr;
         
-        const { data: { publicUrl } } = supabase.storage.from('products').getPublicUrl(path);
+        const { data: pubData } = db.storage.from('uploads').getPublicUrl(path);
+        const publicUrl = pubData.publicUrl;
 
         const adData = {
-          advertiser_id: user.id,
-          advertiser_type: user.user_type,
+          advertiser_id: currentUser.id,
+          advertiser_type: currentUser.profile?.role || 'seller',
           title: title,
           description: desc,
           media_url: publicUrl,
@@ -4772,6 +4971,8 @@ async function initiateAdPayment() {
         document.getElementById('ad-desc').value = '';
         document.getElementById('ad-media-file').value = '';
         document.getElementById('ad-media-preview-container').classList.add('hidden');
+        btn.innerHTML = '<i class="fa-solid fa-credit-card"></i> Pay & Publish Ad';
+        btn.disabled = false;
         loadActiveAds();
       },
       onClose: function() {
@@ -4790,10 +4991,11 @@ async function initiateAdPayment() {
 }
 
 async function loadActiveAds() {
-  if (!user) return;
+  if (!currentUser) return;
   const tbody = document.getElementById('ad-table-body');
+  if (!tbody) return;
   try {
-    const { data: ads, error } = await db.from('advertisements').select('*').eq('advertiser_id', user.id).order('created_at', { ascending: false });
+    const { data: ads, error } = await db.from('advertisements').select('*').eq('advertiser_id', currentUser.id).order('created_at', { ascending: false });
     if (error) throw error;
 
     let totalViews = 0, totalClicks = 0;
@@ -4819,13 +5021,16 @@ async function loadActiveAds() {
       }).join('');
     }
     
-    document.getElementById('ad-active-count').textContent = ads?.filter(a=>a.status==='active').length || 0;
-    document.getElementById('ad-total-views').textContent = totalViews;
-    document.getElementById('ad-total-clicks').textContent = totalClicks;
+    const activeCountEl = document.getElementById('ad-active-count');
+    const viewsEl = document.getElementById('ad-total-views');
+    const clicksEl = document.getElementById('ad-total-clicks');
+    if (activeCountEl) activeCountEl.textContent = ads?.filter(a=>a.status==='active').length || 0;
+    if (viewsEl) viewsEl.textContent = totalViews;
+    if (clicksEl) clicksEl.textContent = totalClicks;
 
   } catch(e) {
     console.error('Failed to load ads:', e);
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:red">Failed to load ads</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:2rem;color:red">Failed to load ads</td></tr>';
   }
 }
 
@@ -4957,10 +5162,16 @@ function closeAdPopup() {
   sessionStorage.setItem('ads_seen_session', 'true');
 }
 
-// Call fetch on load for buyers
-if (!user || user.user_type === 'buyer') {
-  document.addEventListener('DOMContentLoaded', fetchSystemAds);
-}
+// Fetch and show ad popups for buyers on page load
+(function initAdSystem() {
+  // Only show ads to non-sellers (buyers / guests)
+  // Defer until after checkSession resolves
+  setTimeout(() => {
+    if (!currentUser || currentUser.profile?.role === 'buyer' || !currentUser.profile?.role) {
+      fetchSystemAds();
+    }
+  }, 2000);
+})();
 
 
 // ====================================================
@@ -5002,13 +5213,14 @@ async function deletePortfolioImage(url, gigId, event) {
 //  AFFILIATE SYSTEMS
 // ====================================================
 async function generateAndLoadAffiliateData() {
-  if (!user || (user.user_type !== 'seller' && user.user_type !== 'service_provider')) return;
+  if (!currentUser || (currentUser.profile?.role !== 'seller' && currentUser.profile?.role !== 'both')) return;
   
   const linkInput = document.getElementById('referral-link');
-  linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${user.id}`;
+  if (!linkInput) return;
+  linkInput.value = `${window.location.origin}${window.location.pathname}?ref=${currentUser.id}`;
   
   try {
-    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', user.id).order('created_at', { ascending: false });
+    const { data: earnings, error } = await db.from('affiliate_earnings').select('*').eq('affiliate_id', currentUser.id).order('created_at', { ascending: false });
     if(error) throw error;
     
     const total = earnings?.filter(e=>e.status==='paid').reduce((a,c)=>a+(Number(c.earning_amount)||0), 0) || 0;
@@ -5016,8 +5228,8 @@ async function generateAndLoadAffiliateData() {
     
     document.getElementById('aff-total').textContent = `₦${total.toLocaleString()}`;
     document.getElementById('aff-pending').textContent = `₦${pending.toLocaleString()}`;
-    // Clicks/conversions would normally come from a referrals/clicks table. Assuming conversion = total referrals made
-    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', user.id);
+    // Clicks/conversions would normally come from a referrals/clicks table
+    const { count: refCount } = await db.from('referrals').select('*', { count: 'exact', head: true }).eq('referrer_id', currentUser.id);
     document.getElementById('aff-conversions').textContent = refCount || 0;
     
     const tbody = document.getElementById('aff-table-body');
@@ -5098,6 +5310,17 @@ function isWishlisted(productId) { return wishlist.includes(productId); }
 function updateWishlistBadge() {
   const badge = document.getElementById('wishlist-count');
   if (badge) { badge.textContent = wishlist.length; badge.classList.toggle('hidden', !wishlist.length); }
+}
+
+function updateModalWishBtn() {
+  const btn = document.getElementById('modal-wishlist-btn');
+  if (!btn || !currentProd) return;
+  const saved = isWishlisted(currentProd.id);
+  btn.innerHTML = saved
+    ? '<i class="fa-solid fa-heart" style="color:#ef4444"></i>'
+    : '<i class="fa-regular fa-heart"></i>';
+  btn.title = saved ? 'Remove from Wishlist' : 'Save to Wishlist';
+  btn.style.borderColor = saved ? '#ef4444' : '';
 }
 
 async function loadWishlist() {
@@ -5648,89 +5871,88 @@ async function addTrackingUpdate(orderId) {
 // ════════════════════════════════════════════════════════════
 //  FEATURE 9: ADMIN REPORT EXPORT (CSV / PDF)
 // ════════════════════════════════════════════════════════════
-async 
+// (exportAdminReport is defined in admin section above)
+
 // ====================================================
 //  VOICE INPUT FOR AI
 // ====================================================
-let mediaRecorder = null;
-let audioChunks = [];
+let voiceRecognition = null;
 
 async function toggleVoiceInput() {
   const btn = document.getElementById('voice-btn');
   const rec = document.getElementById('voice-recording');
   
+  // Check browser support
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    toast('Not Supported', 'Voice input is not available in this browser. Try Chrome or Edge.', 'warn', 5000);
+    return;
+  }
+
   if (rec.classList.contains('hidden')) {
-    // Start recording
+    // Start listening
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
-      audioChunks = [];
+      voiceRecognition = new SpeechRecognition();
+      voiceRecognition.lang = 'en-NG';
+      voiceRecognition.continuous = false;
+      voiceRecognition.interimResults = true;
+      voiceRecognition.maxAlternatives = 1;
+
+      const chatInput = document.getElementById('chat-input') || document.getElementById('admin-ai-input');
       
-      mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        transcribeAudio(audioBlob);
+      voiceRecognition.onstart = () => {
+        rec.classList.remove('hidden');
+        btn.style.background = 'var(--red)';
+        if (chatInput) chatInput.placeholder = '🎤 Listening...';
       };
-      
-      mediaRecorder.start();
-      rec.classList.remove('hidden');
-      btn.style.background = 'var(--red)';
-      
-      // Auto-stop after 30 seconds
-      setTimeout(() => {
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-          mediaRecorder.stop();
-          rec.classList.add('hidden');
-          btn.style.background = 'var(--forest)';
+
+      voiceRecognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
         }
-      }, 30000);
+        if (chatInput) chatInput.value = transcript;
+      };
+
+      voiceRecognition.onend = () => {
+        rec.classList.add('hidden');
+        btn.style.background = 'var(--forest)';
+        if (chatInput) chatInput.placeholder = 'Type a message...';
+        // Auto-send if we got a transcript
+        if (chatInput && chatInput.value.trim()) {
+          // Trigger the appropriate send function
+          if (chatInput.id === 'admin-ai-input') {
+            askAdminBot();
+          } else {
+            sendChat();
+          }
+        }
+      };
+
+      voiceRecognition.onerror = (event) => {
+        rec.classList.add('hidden');
+        btn.style.background = 'var(--forest)';
+        if (chatInput) chatInput.placeholder = 'Type a message...';
+        if (event.error === 'not-allowed') {
+          toast('Mic Blocked', 'Allow microphone access in browser settings', 'error', 5000);
+        } else if (event.error === 'no-speech') {
+          toast('No Speech Detected', 'Try speaking louder or closer to the mic', 'warn');
+        } else {
+          toast('Voice Error', `${event.error}. Try again or type.`, 'warn');
+        }
+      };
+
+      voiceRecognition.start();
     } catch(e) {
-      toast('Mic Error', 'Could not access microphone', 'error');
+      toast('Mic Error', 'Could not start voice input: ' + e.message, 'error');
     }
   } else {
-    // Stop recording
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    // Stop listening
+    if (voiceRecognition) {
+      voiceRecognition.stop();
     }
     rec.classList.add('hidden');
     btn.style.background = 'var(--forest)';
-  }
-}
-
-async function transcribeAudio(audioBlob) {
-  toast('Processing Voice...', '', 'info', 2000);
-  
-  try {
-    // Use Web Speech API as fallback
-    const audioUrl = URL.createObjectURL(audioBlob);
-    const audio = new Audio(audioUrl);
-    
-    // Try Web Speech API
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'en-NG';
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      
-      recognition.onresult = event => {
-        const transcript = event.results[0][0].text;
-        document.getElementById('admin-ai-input').value = transcript;
-        askAdminBot();
-      };
-      
-      recognition.onerror = () => {
-        toast('Speech Error', 'Try again or type', 'warn');
-      };
-      
-      recognition.start();
-    } else {
-      // Fallback: convert to text with simple message
-      toast('Voice input not supported', 'Please type your question', 'warn');
-    }
-  } catch(e) {
-    toast('Error', e.message, 'error');
   }
 }
 
