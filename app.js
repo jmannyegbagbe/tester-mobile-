@@ -79,7 +79,7 @@ async function callEdge(fnName, body) {
   return data;
 }
 const ADMIN_EMAIL = 'israelefe093@gmail.com';
-const PAYSTACK_PUBLIC_KEY = 'pk_test_xxxxxxxxxxxxxxxx'; // Replace with live key
+const PAYSTACK_PUBLIC_KEY = 'pk_test_ecfb2bed734aa5eb754fad6ef5b62d44f817c782'; // Replace with live key
 const COMMISSION_AMOUNT = 500000; // ₦5,000 in kobo
 const PLATFORM_FEE_PCT = 0.03;
 
